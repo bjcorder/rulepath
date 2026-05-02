@@ -14,6 +14,10 @@ Normal scans should not require:
 
 Optional deep-analysis modes may use sidecars later, but those modes must be explicit.
 
+## Deterministic Dependencies
+
+Dependency resolution must be reproducible. Direct Cargo dependencies use exact version requirements, `Cargo.lock` stores registry checksums, CI runs with `--locked`, GitHub Actions are pinned to full commit SHAs, and the Rust toolchain is pinned by `rust-toolchain.toml`.
+
 ## Memory Model
 
 Prefer compact IDs internally:

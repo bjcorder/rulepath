@@ -138,6 +138,7 @@ CI is advisory by default. `rulepath scan . --ci` exits nonzero only when `.rule
 - [CLI and CI contract](docs/cli-ci.md)
 - [Extending Rulepath](docs/extending.md)
 - [Testing fixtures](docs/testing-fixtures.md)
+- [Dependency pinning](docs/dependency-pinning.md)
 - [Roadmap](docs/roadmap.md)
 - [Implementation notes](docs/implementation-notes.md)
 

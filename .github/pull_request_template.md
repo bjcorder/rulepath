@@ -12,6 +12,7 @@ Describe the user-facing change and the implementation shape.
 - [ ] Findings and review hints remain separate.
 - [ ] Normal scans remain Rust-native and do not require Python, Node, Docker, network access, or a compiler sidecar.
 - [ ] New rules include explanation text and safe/unsafe examples.
+- [ ] Dependency changes follow `docs/dependency-pinning.md`: exact Cargo versions, committed lockfile checksums, full-SHA GitHub Actions, and no branch/tag Git dependencies.
 
 ## Notes
 

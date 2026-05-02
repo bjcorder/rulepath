@@ -28,23 +28,23 @@ repository = "https://github.com/BrianCorder/rulepath"
 description = "Rust-native business logic and invariant analysis for web applications."
 
 [workspace.dependencies]
-anyhow = "1"
-camino = { version = "1", features = ["serde1"] }
-clap = { version = "4.5", features = ["derive"] }
-ignore = "0.4"
-lasso = "0.7"
-miette = { version = "7", features = ["fancy"] }
-oxc_ast = "0.127"
-oxc_parser = "0.127"
-petgraph = "0.6"
-rayon = "1"
-schemars = { version = "0.8", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-thiserror = "1"
-tree-sitter = "0.25"
-tree-sitter-python = "0.25"
+anyhow = "=1.0.102"
+camino = { version = "=1.2.2", features = ["serde1"] }
+clap = { version = "=4.6.1", features = ["derive"] }
+ignore = "=0.4.25"
+lasso = "=0.7.3"
+miette = { version = "=7.6.0", features = ["fancy"] }
+oxc_ast = "=0.127.0"
+oxc_parser = "=0.127.0"
+petgraph = "=0.6.5"
+rayon = "=1.12.0"
+schemars = { version = "=0.8.22", features = ["derive"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+serde_yaml = "=0.9.34"
+thiserror = "=1.0.69"
+tree-sitter = "=0.25.10"
+tree-sitter-python = "=0.25.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
