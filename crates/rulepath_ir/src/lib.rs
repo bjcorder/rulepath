@@ -227,6 +227,8 @@ pub struct Diagnostic {
     pub operation: Option<OperationType>,
     pub route_id: Option<String>,
     pub call_path_id: Option<String>,
+    #[serde(default)]
+    pub call_path: Vec<CallFrame>,
     pub source_ids: Vec<String>,
     pub sink_id: Option<String>,
     pub primary_span: Option<SourceSpan>,

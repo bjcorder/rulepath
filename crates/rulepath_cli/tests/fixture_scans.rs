@@ -83,6 +83,67 @@ fn fastapi_sqlalchemy_unsafe_emits_python_parity_findings() {
 }
 
 #[test]
+fn traced_service_sink_uses_route_request_sources() {
+    let path = fixture_path("fixtures/express_prisma/unsafe");
+    let stdout = run_rulepath(&[
+        "scan",
+        path.to_str().expect("utf-8 fixture path"),
+        "--format",
+        "json",
+    ]);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("json output should parse");
+    let source_ids = json["findings"][0]["source_ids"]
+        .as_array()
+        .expect("source_ids should be an array")
+        .iter()
+        .map(|value| value.as_str().expect("source id should be a string"))
+        .collect::<Vec<_>>();
+    assert!(source_ids.contains(&"source:src/routes/invoices.ts:route_param"));
+    assert!(source_ids.contains(&"source:src/routes/invoices.ts:body"));
+    assert!(!source_ids
+        .iter()
+        .any(|source| source.contains("src/services/invoices.ts")));
+}
+
+#[test]
+fn fastapi_service_sink_uses_route_request_sources() {
+    let path = fixture_path("fixtures/fastapi_sqlalchemy/unsafe");
+    let stdout = run_rulepath(&[
+        "scan",
+        path.to_str().expect("utf-8 fixture path"),
+        "--format",
+        "json",
+    ]);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("json output should parse");
+    let finding = json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .iter()
+        .find(|finding| finding["rule_id"] == "INV001")
+        .expect("INV001 should be emitted");
+    let source_ids = finding["source_ids"]
+        .as_array()
+        .expect("source_ids should be an array")
+        .iter()
+        .map(|value| value.as_str().expect("source id should be a string"))
+        .collect::<Vec<_>>();
+    assert!(source_ids.contains(&"source:app/routes.py:route_param"));
+    assert!(source_ids.contains(&"source:app/routes.py:body"));
+    assert!(!source_ids
+        .iter()
+        .any(|source| source.contains("app/invoice_service.py")));
+}
+
+#[test]
+fn text_output_shows_call_path_frames() {
+    let path = fixture_path("fixtures/express_prisma/unsafe");
+    let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);
+    assert!(stdout.contains("Code path:"));
+    assert!(stdout.contains("src/routes/invoices.ts:10 inline_handler()"));
+    assert!(stdout.contains("src/services/invoices.ts:4 updateInvoice()"));
+}
+
+#[test]
 fn init_and_config_validate_work_together() {
     let dir = unique_temp_dir("init");
     fs::create_dir_all(&dir).expect("temp dir should be created");

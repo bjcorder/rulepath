@@ -18,8 +18,10 @@ pub fn build_project_ir(index: &WorkspaceIndex, config: &ResolvedConfig) -> Proj
         detect_operations(file, config, &mut ir);
     }
 
+    let trace_index = build_trace_index(index, &ir);
     attach_route_evidence(&mut ir);
-    attach_call_paths(&mut ir);
+    attach_call_paths(&mut ir, &trace_index);
+    rewrite_operation_sources_to_route_sources(&mut ir);
     ir
 }
 
@@ -29,16 +31,41 @@ fn detect_routes(file: &SourceFile, ir: &mut ProjectIr) {
         let line_number = line_index + 1;
         if file.language == Language::TypeScript {
             if let Some((method, path)) = detect_express_line(line) {
-                push_route(file, ir, Framework::Express, method, path, line_number);
+                push_route(
+                    file,
+                    ir,
+                    Framework::Express,
+                    method,
+                    path,
+                    "inline_handler".to_owned(),
+                    line_number,
+                );
             }
             if let Some((method, path)) = detect_nextjs_line(file, line) {
-                push_route(file, ir, Framework::NextJs, method, path, line_number);
+                push_route(
+                    file,
+                    ir,
+                    Framework::NextJs,
+                    method.clone(),
+                    path,
+                    method,
+                    line_number,
+                );
             }
         }
 
         if file.language == Language::Python {
             if let Some((method, path)) = detect_fastapi_line(line) {
-                push_route(file, ir, Framework::FastApi, method, path, line_number);
+                push_route(
+                    file,
+                    ir,
+                    Framework::FastApi,
+                    method,
+                    path,
+                    next_python_function_name(file, line_number)
+                        .unwrap_or_else(|| "fastapi_handler".to_owned()),
+                    line_number,
+                );
             }
             if line.contains("ModelViewSet") || line.contains("APIView") {
                 push_route(
@@ -47,6 +74,7 @@ fn detect_routes(file: &SourceFile, ir: &mut ProjectIr) {
                     Framework::DjangoRestFramework,
                     "GET".to_owned(),
                     inferred_django_path(file),
+                    class_name_from_line(line).unwrap_or_else(|| "drf_view".to_owned()),
                     line_number,
                 );
             }
@@ -55,7 +83,15 @@ fn detect_routes(file: &SourceFile, ir: &mut ProjectIr) {
 
     if file.language == Language::TypeScript && ir.routes.len() == routes_before {
         if let Some((method, path, line_number)) = detect_multiline_express_route(file) {
-            push_route(file, ir, Framework::Express, method, path, line_number);
+            push_route(
+                file,
+                ir,
+                Framework::Express,
+                method,
+                path,
+                "inline_handler".to_owned(),
+                line_number,
+            );
         }
     }
 }
@@ -120,6 +156,7 @@ fn push_route(
     framework: Framework,
     method: String,
     path: String,
+    handler: String,
     line_number: usize,
 ) {
     let id = format!("route:{framework:?}:{method}:{path}:{}", ir.routes.len());
@@ -147,7 +184,7 @@ fn push_route(
         language: file.language,
         method,
         path,
-        handler: "statically_discovered_handler".to_owned(),
+        handler,
         span: SourceSpan::single_line(file.relative_path.as_str(), line_number),
         middleware: Vec::new(),
         sources: vec![param_source, body_source],
@@ -424,16 +461,15 @@ fn attach_route_evidence(ir: &mut ProjectIr) {
     }
 }
 
-fn attach_call_paths(ir: &mut ProjectIr) {
+fn attach_call_paths(ir: &mut ProjectIr, trace_index: &TraceIndex) {
     for operation in &ir.operations {
-        let Some(route) = ir
-            .routes
-            .iter()
-            .find(|route| route.span.file_id.as_str() == operation.span.file_id.as_str())
-            .or_else(|| ir.routes.first())
+        let operation_function = trace_index.function_for_span(&operation.span);
+        let Some(route_match) =
+            find_route_for_operation(ir, trace_index, operation, operation_function)
         else {
             continue;
         };
+        let route = route_match.route;
         let mut frames = vec![CallFrame {
             function: route.handler.clone(),
             file: route.span.file_id.clone(),
@@ -441,7 +477,9 @@ fn attach_call_paths(ir: &mut ProjectIr) {
         }];
         if operation.span.file_id.as_str() != route.span.file_id.as_str() {
             frames.push(CallFrame {
-                function: "service_or_repository".to_owned(),
+                function: operation_function
+                    .map(|function| function.name.clone())
+                    .unwrap_or_else(|| "service_or_repository".to_owned()),
                 file: operation.span.file_id.clone(),
                 line: operation.span.start.line,
             });
@@ -451,9 +489,269 @@ fn attach_call_paths(ir: &mut ProjectIr) {
             route_id: route.id.clone(),
             sink_id: operation.id.clone(),
             frames,
-            confidence: Confidence::Medium,
+            confidence: route_match.confidence,
         });
     }
+}
+
+fn rewrite_operation_sources_to_route_sources(ir: &mut ProjectIr) {
+    let route_sources_by_operation = ir
+        .operations
+        .iter()
+        .filter_map(|operation| {
+            let call_path = ir.call_path_for_operation(&operation.id)?;
+            if call_path.confidence == Confidence::Low {
+                return None;
+            }
+            let route = ir.route_for_operation(&operation.id)?;
+            let route_param = route
+                .sources
+                .iter()
+                .find(|source| source.ends_with(":route_param"))
+                .cloned();
+            let body = route
+                .sources
+                .iter()
+                .find(|source| source.ends_with(":body"))
+                .cloned();
+            Some((operation.id.clone(), route_param, body))
+        })
+        .collect::<Vec<_>>();
+
+    for (operation_id, route_param, body) in route_sources_by_operation {
+        let Some(operation) = ir
+            .operations
+            .iter_mut()
+            .find(|operation| operation.id == operation_id)
+        else {
+            continue;
+        };
+        for filter in &mut operation.filters {
+            if filter
+                .source_id
+                .as_deref()
+                .is_some_and(|source| source.ends_with(":route_param"))
+            {
+                filter.source_id = route_param.clone();
+            }
+        }
+        for field in &mut operation.mutation_fields {
+            if field
+                .source_id
+                .as_deref()
+                .is_some_and(|source| source.ends_with(":body"))
+            {
+                field.source_id = body.clone();
+            }
+        }
+    }
+}
+
+fn find_route_for_operation<'a>(
+    ir: &'a ProjectIr,
+    trace_index: &TraceIndex,
+    operation: &OperationFact,
+    operation_function: Option<&FunctionSpan>,
+) -> Option<RouteMatch<'a>> {
+    if let Some(route) = ir
+        .routes
+        .iter()
+        .find(|route| route.span.file_id.as_str() == operation.span.file_id.as_str())
+    {
+        return Some(RouteMatch {
+            route,
+            confidence: Confidence::High,
+        });
+    }
+
+    if let Some(function) = operation_function {
+        if let Some(route_call) = trace_index.route_calls.iter().find(|call| {
+            call.callee == function.name
+                || call
+                    .callee
+                    .rsplit('.')
+                    .next()
+                    .is_some_and(|last_segment| last_segment == function.name)
+        }) {
+            return ir
+                .routes
+                .iter()
+                .find(|route| route.id == route_call.route_id)
+                .map(|route| RouteMatch {
+                    route,
+                    confidence: Confidence::High,
+                });
+        }
+    }
+
+    ir.routes.first().map(|route| RouteMatch {
+        route,
+        confidence: Confidence::Low,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RouteMatch<'a> {
+    route: &'a RouteFact,
+    confidence: Confidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TraceIndex {
+    functions: Vec<FunctionSpan>,
+    route_calls: Vec<RouteCall>,
+}
+
+impl TraceIndex {
+    fn function_for_span(&self, span: &SourceSpan) -> Option<&FunctionSpan> {
+        self.functions.iter().find(|function| {
+            function.file_id == span.file_id
+                && function.start_line <= span.start.line
+                && function.end_line >= span.start.line
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FunctionSpan {
+    file_id: String,
+    name: String,
+    start_line: usize,
+    end_line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RouteCall {
+    route_id: String,
+    callee: String,
+}
+
+fn build_trace_index(index: &WorkspaceIndex, ir: &ProjectIr) -> TraceIndex {
+    let mut functions = index
+        .files
+        .iter()
+        .flat_map(extract_functions)
+        .collect::<Vec<_>>();
+    assign_function_ends(index, &mut functions);
+    let route_calls = ir
+        .routes
+        .iter()
+        .filter_map(|route| {
+            let file = index
+                .files
+                .iter()
+                .find(|file| file.relative_path == route.span.file_id)?;
+            Some(extract_route_calls(file, route))
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    TraceIndex {
+        functions,
+        route_calls,
+    }
+}
+
+fn extract_functions(file: &SourceFile) -> Vec<FunctionSpan> {
+    file.text
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line_number = index + 1;
+            let name = match file.language {
+                Language::Python => python_function_name(line),
+                Language::TypeScript => typescript_function_name(line),
+            }?;
+            Some(FunctionSpan {
+                file_id: file.relative_path.clone(),
+                name,
+                start_line: line_number,
+                end_line: file.text.lines().count(),
+            })
+        })
+        .collect()
+}
+
+fn assign_function_ends(index: &WorkspaceIndex, functions: &mut [FunctionSpan]) {
+    functions.sort_by(|left, right| {
+        left.file_id
+            .cmp(&right.file_id)
+            .then(left.start_line.cmp(&right.start_line))
+    });
+    for i in 0..functions.len() {
+        let file_line_count = index
+            .files
+            .iter()
+            .find(|file| file.relative_path == functions[i].file_id)
+            .map_or(functions[i].end_line, |file| file.text.lines().count());
+        let next_start_in_file = functions.get(i + 1).and_then(|next| {
+            (next.file_id == functions[i].file_id).then_some(next.start_line.saturating_sub(1))
+        });
+        functions[i].end_line = next_start_in_file.unwrap_or(file_line_count);
+    }
+}
+
+fn extract_route_calls(file: &SourceFile, route: &RouteFact) -> Vec<RouteCall> {
+    route_body(file, route)
+        .lines()
+        .flat_map(extract_call_names_from_line)
+        .filter(|callee| is_trace_candidate(callee))
+        .map(|callee| RouteCall {
+            route_id: route.id.clone(),
+            callee,
+        })
+        .collect()
+}
+
+fn route_body(file: &SourceFile, route: &RouteFact) -> String {
+    let lines = file.text.lines().collect::<Vec<_>>();
+    let start_index = route.span.start.line.saturating_sub(1);
+    let end_index = (start_index + 40).min(lines.len());
+    lines[start_index..end_index].join("\n")
+}
+
+fn extract_call_names_from_line(line: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if !is_identifier_start(bytes[index] as char) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < bytes.len() {
+            let character = bytes[index] as char;
+            if is_identifier_char_value(character) || character == '.' {
+                index += 1;
+            } else {
+                break;
+            }
+        }
+        let candidate = &line[start..index];
+        let rest = line[index..].trim_start();
+        if rest.starts_with('(') {
+            names.push(candidate.to_owned());
+        }
+    }
+    names
+}
+
+fn is_trace_candidate(callee: &str) -> bool {
+    let last = callee.rsplit('.').next().unwrap_or(callee);
+    !matches!(
+        last,
+        "Router"
+            | "Depends"
+            | "Response"
+            | "json"
+            | "sendStatus"
+            | "requireAuth"
+            | "requirePermission"
+            | "require_permission"
+            | "get_current_user"
+            | "auth"
+    )
 }
 
 fn extract_first_string(line: &str) -> Option<String> {
@@ -486,6 +784,52 @@ fn inferred_django_path(file: &SourceFile) -> String {
     format!("/{}", file.relative_path.replace(".py", ""))
 }
 
+fn next_python_function_name(file: &SourceFile, after_line: usize) -> Option<String> {
+    file.text
+        .lines()
+        .skip(after_line)
+        .find_map(python_function_name)
+}
+
+fn class_name_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix("class ")?;
+    Some(
+        rest.chars()
+            .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+            .collect(),
+    )
+}
+
+fn python_function_name(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix("def ")?;
+    let name = rest
+        .chars()
+        .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+        .collect::<String>();
+    (!name.is_empty()).then_some(name)
+}
+
+fn typescript_function_name(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    for prefix in [
+        "export async function ",
+        "export function ",
+        "async function ",
+        "function ",
+    ] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let name = rest
+                .chars()
+                .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+                .collect::<String>();
+            return (!name.is_empty()).then_some(name);
+        }
+    }
+    None
+}
+
 fn parse_property_call(text: &str) -> Option<(String, String)> {
     let mut parts = text.splitn(3, '.');
     let model = parts
@@ -506,7 +850,15 @@ fn parse_property_call(text: &str) -> Option<(String, String)> {
 }
 
 fn is_identifier_char(character: &char) -> bool {
-    character.is_ascii_alphanumeric() || *character == '_'
+    is_identifier_char_value(*character)
+}
+
+fn is_identifier_char_value(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_'
+}
+
+fn is_identifier_start(character: char) -> bool {
+    character.is_ascii_alphabetic() || character == '_'
 }
 
 fn prisma_operation(method: &str) -> Option<OperationType> {
