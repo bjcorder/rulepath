@@ -1,0 +1,20 @@
+[package]
+name = "rulepath_config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Strict Rulepath configuration loading and profile merging."
+
+[dependencies]
+camino.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+rulepath_ir = { path = "../rulepath_ir" }
+
+[lints]
+workspace = true

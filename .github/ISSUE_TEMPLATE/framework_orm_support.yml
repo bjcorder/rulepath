@@ -1,0 +1,35 @@
+name: Framework or ORM support
+description: Request support for a language, framework, auth system, or data layer.
+title: "[support]: "
+labels: ["support-request"]
+body:
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Source language
+        - Framework
+        - ORM or data layer
+        - Auth or authorization pattern
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: Name
+      placeholder: Flask, NestJS, SQLModel, TypeORM
+    validations:
+      required: true
+  - type: textarea
+    id: patterns
+    attributes:
+      label: Important patterns
+      description: Include route, auth, and data-layer examples.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: fixtures
+    attributes:
+      label: Suggested fixture scenarios

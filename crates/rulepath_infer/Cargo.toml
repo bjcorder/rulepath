@@ -1,0 +1,15 @@
+[package]
+name = "rulepath_infer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Draft config inference for Rulepath."
+
+[dependencies]
+rulepath_config = { path = "../rulepath_config" }
+rulepath_workspace = { path = "../rulepath_workspace" }
+
+[lints]
+workspace = true

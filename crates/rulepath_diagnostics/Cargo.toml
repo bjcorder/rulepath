@@ -1,0 +1,16 @@
+[package]
+name = "rulepath_diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Diagnostics utilities for Rulepath."
+
+[dependencies]
+miette.workspace = true
+thiserror.workspace = true
+rulepath_ir = { path = "../rulepath_ir" }
+
+[lints]
+workspace = true

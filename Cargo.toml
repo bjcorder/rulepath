@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/rulepath_auth",
+  "crates/rulepath_cli",
+  "crates/rulepath_config",
+  "crates/rulepath_dataflow",
+  "crates/rulepath_diagnostics",
+  "crates/rulepath_frameworks",
+  "crates/rulepath_infer",
+  "crates/rulepath_ir",
+  "crates/rulepath_lang_python",
+  "crates/rulepath_lang_typescript",
+  "crates/rulepath_orms",
+  "crates/rulepath_parsers",
+  "crates/rulepath_reporters",
+  "crates/rulepath_rules",
+  "crates/rulepath_sarif",
+  "crates/rulepath_workspace",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Brian Corder"]
+repository = "https://github.com/BrianCorder/rulepath"
+description = "Rust-native business logic and invariant analysis for web applications."
+
+[workspace.dependencies]
+anyhow = "1"
+camino = { version = "1", features = ["serde1"] }
+clap = { version = "4.5", features = ["derive"] }
+ignore = "0.4"
+lasso = "0.7"
+miette = { version = "7", features = ["fancy"] }
+oxc_ast = "0.127"
+oxc_parser = "0.127"
+petgraph = "0.6"
+rayon = "1"
+schemars = { version = "0.8", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "1"
+tree-sitter = "0.25"
+tree-sitter-python = "0.25"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_many_arguments = "allow"

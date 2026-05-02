@@ -1,0 +1,15 @@
+[package]
+name = "rulepath_frameworks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Framework adapter registry for Rulepath."
+
+[dependencies]
+rulepath_ir = { path = "../rulepath_ir" }
+rulepath_parsers = { path = "../rulepath_parsers" }
+
+[lints]
+workspace = true

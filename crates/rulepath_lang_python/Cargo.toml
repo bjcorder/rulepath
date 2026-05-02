@@ -1,0 +1,22 @@
+[package]
+name = "rulepath_lang_python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Python language adapter for Rulepath."
+
+[features]
+default = ["tree-sitter-backend"]
+tree-sitter-backend = ["dep:tree-sitter", "dep:tree-sitter-python"]
+
+[dependencies]
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-python = { workspace = true, optional = true }
+rulepath_ir = { path = "../rulepath_ir" }
+rulepath_parsers = { path = "../rulepath_parsers" }
+rulepath_workspace = { path = "../rulepath_workspace" }
+
+[lints]
+workspace = true

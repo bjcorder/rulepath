@@ -1,0 +1,148 @@
+# Rulepath
+
+Rulepath is a Rust-native static analysis tool for business logic and security invariant review in internally developed web applications.
+
+It traces from externally reachable routes into service-layer functions and data-layer operations, then checks whether those paths preserve invariants declared in `.rulepath.yml`.
+
+Rulepath is not a generic insecure API scanner. Its first wedge is repeatable review of app-specific invariants:
+
+```text
+This route updates an Invoice by ID. Is the lookup scoped to the current tenant?
+This handler accepts req.body. Can the client set role, tenant_id, status, or total?
+This export endpoint returns bulk data. Does it enforce tenant scope and export permission?
+This service changes Client.status. Is there operation-specific authorization?
+```
+
+## v1 Scope
+
+Rulepath v1 targets internally developed web applications:
+
+| Area | v1 support |
+| --- | --- |
+| Implementation language | Rust |
+| CLI binary | `rulepath` |
+| Source languages analyzed | Python, TypeScript |
+| Python frameworks | FastAPI, Django, Django REST Framework |
+| TypeScript frameworks | Express, Next.js |
+| Data layers | Django ORM, SQLAlchemy, Prisma |
+| Policy file | `.rulepath.yml` |
+| Inference output | `.rulepath.inferred.yml` |
+| Baseline file | `.rulepath.baseline.json` |
+
+Normal scans must not require Python, Node, Docker, network access, or a TypeScript compiler process.
+
+## Build From Source
+
+```bash
+cargo build
+cargo test
+cargo run -p rulepath_cli -- --help
+```
+
+The CLI package is named `rulepath_cli`; the binary it produces is named `rulepath`.
+
+## Quickstart
+
+```bash
+rulepath init
+rulepath config validate
+rulepath scan .
+rulepath scan . --format json
+rulepath scan . --ci
+```
+
+`rulepath init` creates a starter `.rulepath.yml`. `rulepath infer .` writes `.rulepath.inferred.yml` as a draft; inferred policy is never silently enforced.
+
+## Core Commands
+
+```bash
+rulepath init
+rulepath config validate
+rulepath infer .
+rulepath scan .
+rulepath scan . --ci
+rulepath scan . --format json
+rulepath scan . --format sarif
+rulepath baseline create
+rulepath explain INV001
+```
+
+## Example Config
+
+```yaml
+version: 1
+
+profile:
+  name: internal_web_app
+
+analysis:
+  mode: high_confidence
+  service_layer_tracing: true
+  max_call_depth: 6
+  include_review_hints: true
+
+ci:
+  fail: false
+  baseline_file: .rulepath.baseline.json
+
+suppressions:
+  require_reason: true
+  min_reason_length: 20
+
+resources:
+  Invoice:
+    tenant_fields: [tenant_id, tenantId, client_id, clientId]
+    sensitive_fields: [status, amount, total, approved_by, paid_at]
+    server_owned_fields: [status, amount, total, approved_by, paid_at]
+
+invariants:
+  - id: no_unscoped_invoice_access
+    type: scoped_resource_access
+    resources: [Invoice]
+    operations: [read, update, delete, export]
+    required_scope: [tenant]
+    severity: high
+```
+
+Unknown config keys fail validation. Inline suppressions require a reason by default:
+
+```ts
+// rulepath-disable-next-line INV001 -- enforced by requireSuperAdmin middleware above
+const invoice = await prisma.invoice.findUnique({ where: { id } })
+```
+
+## Output Policy
+
+Rulepath separates high-confidence findings from medium-confidence review hints in every output mode.
+
+```text
+Rulepath scan results
+
+Findings: 2
+  [HIGH] INV001 Unscoped Invoice access
+  [HIGH] INV002 Client-controlled Invoice fields
+
+Review hints: 1
+  [MEDIUM] HINT003 Possible workflow state transition
+```
+
+CI is advisory by default. `rulepath scan . --ci` exits nonzero only when `.rulepath.yml` sets `ci.fail: true` and an unsuppressed, non-baselined finding matches `ci.fail_on`.
+
+## Documentation
+
+- [Product requirements](docs/product.md)
+- [Architecture](docs/architecture.md)
+- [Common IR](docs/ir.md)
+- [Configuration](docs/configuration.md)
+- [Rule catalog](docs/rules.md)
+- [CLI and CI contract](docs/cli-ci.md)
+- [Extending Rulepath](docs/extending.md)
+- [Testing fixtures](docs/testing-fixtures.md)
+- [Roadmap](docs/roadmap.md)
+- [Implementation notes](docs/implementation-notes.md)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [SUPPORT.md](SUPPORT.md).
+
+Rulepath is released under the MIT license.

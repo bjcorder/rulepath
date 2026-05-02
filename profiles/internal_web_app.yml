@@ -1,0 +1,236 @@
+version: 1
+
+profile:
+  name: internal_web_app
+
+frameworks:
+  python:
+    - fastapi
+    - django
+    - django_rest_framework
+  typescript:
+    - express
+    - nextjs
+
+data_layers:
+  python:
+    - django_orm
+    - sqlalchemy
+  typescript:
+    - prisma
+
+analysis:
+  mode: high_confidence
+  service_layer_tracing: true
+  max_call_depth: 6
+  include_review_hints: true
+  include_paths:
+    - app
+    - src
+  exclude_paths:
+    - node_modules
+    - .venv
+    - venv
+    - migrations
+    - tests
+    - dist
+    - build
+    - target
+
+ci:
+  fail: false
+  fail_on:
+    severities:
+      - high
+      - critical
+    confidence:
+      - high
+    include_review_hints: false
+    new_findings_only: true
+  baseline_file: .rulepath.baseline.json
+
+inference:
+  generated_file: .rulepath.inferred.yml
+  use_inferred_file_for_scan: false
+
+suppressions:
+  require_reason: true
+  min_reason_length: 20
+
+auth:
+  principal_expressions:
+    python:
+      - request.user
+      - current_user
+      - user
+    typescript:
+      - req.user
+      - res.locals.user
+      - session.user
+      - ctx.user
+      - user
+  authentication_guards:
+    python:
+      - login_required
+      - LoginRequiredMixin
+      - IsAuthenticated
+      - get_current_user
+      - require_authenticated_user
+    typescript:
+      - requireAuth
+      - withAuth
+      - auth
+      - getServerSession
+      - getSession
+      - requireSession
+  authorization_functions:
+    python:
+      - permission_required
+      - PermissionRequiredMixin
+      - has_perm
+      - require_permission
+      - check_permission
+      - authorize
+      - can
+      - policy.check
+    typescript:
+      - requirePermission
+      - checkPermission
+      - authorize
+      - can
+      - policy.check
+      - assertCan
+
+tenancy:
+  tenant_fields:
+    - tenant_id
+    - tenantId
+    - org_id
+    - orgId
+    - organization_id
+    - organizationId
+    - account_id
+    - accountId
+    - client_id
+    - clientId
+    - workspace_id
+    - workspaceId
+    - owner_id
+    - ownerId
+    - user_id
+    - userId
+  current_tenant_expressions:
+    python:
+      - request.user.tenant_id
+      - request.user.org_id
+      - current_user.tenant_id
+      - current_user.org_id
+    typescript:
+      - req.user.tenantId
+      - req.user.orgId
+      - session.user.tenantId
+      - session.user.orgId
+
+resources:
+  Client:
+    tenant_fields:
+      - tenant_id
+      - org_id
+      - account_id
+    sensitive_fields:
+      - status
+      - owner_id
+      - tenant_id
+      - org_id
+      - billing_status
+      - plan
+    server_owned_fields:
+      - status
+      - owner_id
+      - tenant_id
+      - org_id
+      - billing_status
+  Invoice:
+    tenant_fields:
+      - tenant_id
+      - tenantId
+      - client_id
+      - clientId
+      - org_id
+      - orgId
+    sensitive_fields:
+      - status
+      - amount
+      - total
+      - discount
+      - balance
+      - approved_by
+      - approvedBy
+      - paid_at
+      - paidAt
+    server_owned_fields:
+      - status
+      - amount
+      - total
+      - balance
+      - approved_by
+      - approvedBy
+      - paid_at
+      - paidAt
+  User:
+    tenant_fields:
+      - tenant_id
+      - tenantId
+      - org_id
+      - orgId
+    sensitive_fields:
+      - role
+      - roles
+      - is_admin
+      - isAdmin
+      - is_staff
+      - isStaff
+      - permissions
+      - tenant_id
+      - tenantId
+      - org_id
+      - orgId
+      - disabled
+    server_owned_fields:
+      - role
+      - roles
+      - is_admin
+      - isAdmin
+      - is_staff
+      - isStaff
+      - permissions
+      - tenant_id
+      - tenantId
+      - org_id
+      - orgId
+      - disabled
+
+invariants:
+  - id: no_unscoped_resource_access
+    type: scoped_resource_access
+    resources:
+      - Client
+      - Invoice
+      - User
+    operations:
+      - read
+      - update
+      - delete
+      - export
+    required_scope:
+      - tenant
+    severity: high
+  - id: no_client_controlled_server_owned_fields
+    type: client_controlled_field
+    resources:
+      - Client
+      - Invoice
+      - User
+    fields:
+      source: server_owned_fields
+    severity: high

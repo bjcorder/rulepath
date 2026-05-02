@@ -1,0 +1,15 @@
+[package]
+name = "rulepath_auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Authentication and authorization evidence normalization for Rulepath."
+
+[dependencies]
+rulepath_config = { path = "../rulepath_config" }
+rulepath_ir = { path = "../rulepath_ir" }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "rulepath_lang_typescript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "TypeScript language adapter for Rulepath."
+
+[features]
+default = ["oxc-backend"]
+oxc-backend = ["dep:oxc_ast", "dep:oxc_parser"]
+
+[dependencies]
+oxc_ast = { workspace = true, optional = true }
+oxc_parser = { workspace = true, optional = true }
+rulepath_ir = { path = "../rulepath_ir" }
+rulepath_parsers = { path = "../rulepath_parsers" }
+rulepath_workspace = { path = "../rulepath_workspace" }
+
+[lints]
+workspace = true

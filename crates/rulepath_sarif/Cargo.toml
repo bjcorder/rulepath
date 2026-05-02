@@ -1,0 +1,15 @@
+[package]
+name = "rulepath_sarif"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "SARIF reporter for Rulepath."
+
+[dependencies]
+serde_json.workspace = true
+rulepath_ir = { path = "../rulepath_ir" }
+
+[lints]
+workspace = true

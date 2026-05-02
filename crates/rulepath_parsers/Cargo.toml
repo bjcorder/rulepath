@@ -1,0 +1,16 @@
+[package]
+name = "rulepath_parsers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Parser traits and parser-neutral facts for Rulepath."
+
+[dependencies]
+serde.workspace = true
+rulepath_ir = { path = "../rulepath_ir" }
+rulepath_workspace = { path = "../rulepath_workspace" }
+
+[lints]
+workspace = true
