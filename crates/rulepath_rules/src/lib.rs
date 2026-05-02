@@ -483,6 +483,20 @@ fn diagnostic(
     expected_evidence: Vec<String>,
     suggested_fix: Option<String>,
 ) -> Diagnostic {
+    let mut source_ids = operation
+        .filters
+        .iter()
+        .filter_map(|filter| filter.source_id.clone())
+        .chain(
+            operation
+                .mutation_fields
+                .iter()
+                .filter_map(|field| field.source_id.clone()),
+        )
+        .collect::<Vec<_>>();
+    source_ids.sort();
+    source_ids.dedup();
+
     Diagnostic {
         kind,
         rule_id: rule_id.to_owned(),
@@ -493,17 +507,7 @@ fn diagnostic(
         operation: Some(operation.operation),
         route_id: route_id.map(ToOwned::to_owned),
         call_path_id: call_path_id.map(ToOwned::to_owned),
-        source_ids: operation
-            .filters
-            .iter()
-            .filter_map(|filter| filter.source_id.clone())
-            .chain(
-                operation
-                    .mutation_fields
-                    .iter()
-                    .filter_map(|field| field.source_id.clone()),
-            )
-            .collect(),
+        source_ids,
         sink_id: Some(operation.id.clone()),
         primary_span: Some(operation.span.clone()),
         missing_invariant,

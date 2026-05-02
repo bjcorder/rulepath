@@ -42,3 +42,7 @@ Fatal errors include config load failures, schema violations, invalid baselines,
 Non-fatal diagnostics include parse errors in individual files, unresolved imports, unsupported syntax, and ambiguous resource inference.
 
 Uncertainty should reduce confidence or produce review hints.
+
+## Current Trace Foundation
+
+The first analyzer slice builds a conservative trace index from route bodies, simple function spans, and service calls. Sinks discovered in service files are connected back to route request sources when the route calls the enclosing service function. This is intentionally narrow and fixture-backed; deeper parser-backed symbol resolution should replace these heuristics over time.
