@@ -464,10 +464,12 @@ fn attach_route_evidence(ir: &mut ProjectIr) {
 fn attach_call_paths(ir: &mut ProjectIr, trace_index: &TraceIndex) {
     for operation in &ir.operations {
         let operation_function = trace_index.function_for_span(&operation.span);
-        let Some(route) = find_route_for_operation(ir, trace_index, operation, operation_function)
+        let Some(route_match) =
+            find_route_for_operation(ir, trace_index, operation, operation_function)
         else {
             continue;
         };
+        let route = route_match.route;
         let mut frames = vec![CallFrame {
             function: route.handler.clone(),
             file: route.span.file_id.clone(),
@@ -487,7 +489,7 @@ fn attach_call_paths(ir: &mut ProjectIr, trace_index: &TraceIndex) {
             route_id: route.id.clone(),
             sink_id: operation.id.clone(),
             frames,
-            confidence: Confidence::Medium,
+            confidence: route_match.confidence,
         });
     }
 }
@@ -497,6 +499,10 @@ fn rewrite_operation_sources_to_route_sources(ir: &mut ProjectIr) {
         .operations
         .iter()
         .filter_map(|operation| {
+            let call_path = ir.call_path_for_operation(&operation.id)?;
+            if call_path.confidence == Confidence::Low {
+                return None;
+            }
             let route = ir.route_for_operation(&operation.id)?;
             let route_param = route
                 .sources
@@ -546,13 +552,16 @@ fn find_route_for_operation<'a>(
     trace_index: &TraceIndex,
     operation: &OperationFact,
     operation_function: Option<&FunctionSpan>,
-) -> Option<&'a RouteFact> {
+) -> Option<RouteMatch<'a>> {
     if let Some(route) = ir
         .routes
         .iter()
         .find(|route| route.span.file_id.as_str() == operation.span.file_id.as_str())
     {
-        return Some(route);
+        return Some(RouteMatch {
+            route,
+            confidence: Confidence::High,
+        });
     }
 
     if let Some(function) = operation_function {
@@ -567,11 +576,24 @@ fn find_route_for_operation<'a>(
             return ir
                 .routes
                 .iter()
-                .find(|route| route.id == route_call.route_id);
+                .find(|route| route.id == route_call.route_id)
+                .map(|route| RouteMatch {
+                    route,
+                    confidence: Confidence::High,
+                });
         }
     }
 
-    ir.routes.first()
+    ir.routes.first().map(|route| RouteMatch {
+        route,
+        confidence: Confidence::Low,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RouteMatch<'a> {
+    route: &'a RouteFact,
+    confidence: Confidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

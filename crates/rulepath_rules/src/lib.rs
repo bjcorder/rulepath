@@ -1,7 +1,7 @@
 use rulepath_config::ResolvedConfig;
 use rulepath_ir::{
-    fingerprint, Confidence, Diagnostic, DiagnosticKind, EvidenceFact, EvidenceKind, OperationFact,
-    OperationType, ProjectIr, Severity,
+    fingerprint, CallPath, Confidence, Diagnostic, DiagnosticKind, EvidenceFact, EvidenceKind,
+    OperationFact, OperationType, ProjectIr, Severity,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,14 +22,16 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
         let call_path = ir.call_path_for_operation(&operation.id);
         let route_id = route.map(|route| route.id.as_str());
         let evidence = ir.evidence_for_route_or_sink(route_id, &operation.id);
+        let trusted_route_context =
+            call_path.is_some_and(|path| path.confidence != Confidence::Low);
 
-        if should_emit_inv001(operation, config, &evidence) {
+        if trusted_route_context && should_emit_inv001(operation, config, &evidence) {
             diagnostics.push(finding(
                 "INV001",
                 format!("Unscoped {} access", operation.resource),
                 operation,
                 route_id,
-                call_path.map(|path| path.id.as_str()),
+                call_path,
                 "Resource access requires tenant/client/object scope.",
                 observed_labels(&evidence),
                 vec!["tenant_scope or object_scope".to_owned()],
@@ -37,13 +39,13 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
             ));
         }
 
-        if should_emit_inv002(operation, config) {
+        if trusted_route_context && should_emit_inv002(operation, config) {
             diagnostics.push(finding(
                 "INV002",
                 format!("Client-controlled {} fields", operation.resource),
                 operation,
                 route_id,
-                call_path.map(|path| path.id.as_str()),
+                call_path,
                 "Server-owned or sensitive fields must not be directly controlled by the client.",
                 observed_labels(&evidence),
                 vec!["allowlisted mutation fields".to_owned()],
@@ -51,7 +53,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
             ));
         }
 
-        if should_emit_inv003(operation, config, &evidence) {
+        if trusted_route_context && should_emit_inv003(operation, config, &evidence) {
             diagnostics.push(finding(
                 "INV003",
                 format!(
@@ -60,7 +62,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                 ),
                 operation,
                 route_id,
-                call_path.map(|path| path.id.as_str()),
+                call_path,
                 "Sensitive mutations require operation-specific authorization.",
                 observed_labels(&evidence),
                 vec!["authorization".to_owned()],
@@ -68,13 +70,13 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
             ));
         }
 
-        if should_emit_inv004(operation, config, &evidence) {
+        if trusted_route_context && should_emit_inv004(operation, config, &evidence) {
             diagnostics.push(finding(
                 "INV004",
                 format!("{} state transition lacks required evidence", operation.resource),
                 operation,
                 route_id,
-                call_path.map(|path| path.id.as_str()),
+                call_path,
                 "Configured state transitions require invariant evidence.",
                 observed_labels(&evidence),
                 vec!["configured transition evidence".to_owned()],
@@ -82,13 +84,13 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
             ));
         }
 
-        if should_emit_inv006(operation, config, &evidence) {
+        if trusted_route_context && should_emit_inv006(operation, config, &evidence) {
             diagnostics.push(finding(
                 "INV006",
                 format!("Bulk {} mutation without scope", operation.resource),
                 operation,
                 route_id,
-                call_path.map(|path| path.id.as_str()),
+                call_path,
                 "Bulk update/delete requires tenant/client/object scope.",
                 observed_labels(&evidence),
                 vec!["tenant_scope or object_scope".to_owned()],
@@ -96,13 +98,13 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
             ));
         }
 
-        if should_emit_inv007(operation, config, &evidence) {
+        if trusted_route_context && should_emit_inv007(operation, config, &evidence) {
             diagnostics.push(finding(
                 "INV007",
                 format!("{} export without permission or scope", operation.resource),
                 operation,
                 route_id,
-                call_path.map(|path| path.id.as_str()),
+                call_path,
                 "Export/download/report operations require permission and scope.",
                 observed_labels(&evidence),
                 vec![
@@ -113,18 +115,20 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
             ));
         }
 
-        if should_emit_inv008(
-            operation,
-            config,
-            &evidence,
-            call_path.map_or(0, |path| path.frames.len()),
-        ) {
+        if trusted_route_context
+            && should_emit_inv008(
+                operation,
+                config,
+                &evidence,
+                call_path.map_or(0, |path| path.frames.len()),
+            )
+        {
             diagnostics.push(finding(
                 "INV008",
                 format!("Sensitive {} mutation reachable from insufficiently protected route", operation.resource),
                 operation,
                 route_id,
-                call_path.map(|path| path.id.as_str()),
+                call_path,
                 "Service-layer sensitive mutations require inherited or local auth and scope evidence.",
                 observed_labels(&evidence),
                 vec!["authorization".to_owned(), "tenant_scope or object_scope".to_owned()],
@@ -137,7 +141,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
             config,
             &evidence,
             route_id,
-            call_path.map(|path| path.id.as_str()),
+            call_path,
             &mut diagnostics,
         );
     }
@@ -356,7 +360,7 @@ fn emit_hints(
     config: &ResolvedConfig,
     evidence: &[&EvidenceFact],
     route_id: Option<&str>,
-    call_path_id: Option<&str>,
+    call_path: Option<&CallPath>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if config.resource(&operation.resource).is_none() && operation.resource != "Unknown" {
@@ -365,7 +369,7 @@ fn emit_hints(
             format!("Possible resource not configured: {}", operation.resource),
             operation,
             route_id,
-            call_path_id,
+            call_path,
             "Add this resource to .rulepath.yml if it is business-sensitive.",
         ));
     }
@@ -382,7 +386,7 @@ fn emit_hints(
             format!("Possible {} workflow transition", operation.resource),
             operation,
             route_id,
-            call_path_id,
+            call_path,
             "Consider adding a state_transition invariant.",
         ));
     }
@@ -397,7 +401,7 @@ fn emit_hints(
             "Export-like endpoint with unclear resource".to_owned(),
             operation,
             route_id,
-            call_path_id,
+            call_path,
             "Configure the exported resource and required permission.",
         ));
     }
@@ -412,7 +416,7 @@ fn emit_hints(
             format!("Auth present but {} scope is unclear", operation.resource),
             operation,
             route_id,
-            call_path_id,
+            call_path,
             "Add tenant or object-scope evidence.",
         ));
     }
@@ -423,7 +427,7 @@ fn finding(
     title: String,
     operation: &OperationFact,
     route_id: Option<&str>,
-    call_path_id: Option<&str>,
+    call_path: Option<&CallPath>,
     missing_invariant: &str,
     observed_evidence: Vec<String>,
     expected_evidence: Vec<String>,
@@ -437,7 +441,7 @@ fn finding(
         Confidence::High,
         operation,
         route_id,
-        call_path_id,
+        call_path,
         Some(missing_invariant.to_owned()),
         observed_evidence,
         expected_evidence,
@@ -450,7 +454,7 @@ fn hint(
     title: String,
     operation: &OperationFact,
     route_id: Option<&str>,
-    call_path_id: Option<&str>,
+    call_path: Option<&CallPath>,
     suggested_action: &str,
 ) -> Diagnostic {
     diagnostic(
@@ -461,7 +465,7 @@ fn hint(
         Confidence::Medium,
         operation,
         route_id,
-        call_path_id,
+        call_path,
         None,
         Vec::new(),
         Vec::new(),
@@ -477,7 +481,7 @@ fn diagnostic(
     confidence: Confidence,
     operation: &OperationFact,
     route_id: Option<&str>,
-    call_path_id: Option<&str>,
+    call_path: Option<&CallPath>,
     missing_invariant: Option<String>,
     observed_evidence: Vec<String>,
     expected_evidence: Vec<String>,
@@ -506,7 +510,10 @@ fn diagnostic(
         resource: Some(operation.resource.clone()),
         operation: Some(operation.operation),
         route_id: route_id.map(ToOwned::to_owned),
-        call_path_id: call_path_id.map(ToOwned::to_owned),
+        call_path_id: call_path.map(|path| path.id.clone()),
+        call_path: call_path
+            .map(|path| path.frames.clone())
+            .unwrap_or_default(),
         source_ids,
         sink_id: Some(operation.id.clone()),
         primary_span: Some(operation.span.clone()),

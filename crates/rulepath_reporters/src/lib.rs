@@ -82,7 +82,15 @@ fn render_diagnostic_detail(diagnostic: &Diagnostic) -> String {
     if let Some(route_id) = &diagnostic.route_id {
         output.push_str(&format!("\nRoute:\n  {route_id}\n"));
     }
-    if let Some(call_path_id) = &diagnostic.call_path_id {
+    if !diagnostic.call_path.is_empty() {
+        output.push_str("\nCode path:\n");
+        for frame in &diagnostic.call_path {
+            output.push_str(&format!(
+                "  {}:{} {}()\n",
+                frame.file, frame.line, frame.function
+            ));
+        }
+    } else if let Some(call_path_id) = &diagnostic.call_path_id {
         output.push_str(&format!("\nCode path:\n  {call_path_id}\n"));
     }
     if !diagnostic.source_ids.is_empty() {

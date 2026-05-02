@@ -68,6 +68,7 @@ fn diagnostic_to_result(diagnostic: &Diagnostic) -> Value {
         "partialFingerprints": {
             "rulepathFingerprint": diagnostic.fingerprint
         },
+        "codeFlows": code_flows(diagnostic),
         "properties": {
             "kind": match diagnostic.kind {
                 DiagnosticKind::Finding => "finding",
@@ -75,6 +76,41 @@ fn diagnostic_to_result(diagnostic: &Diagnostic) -> Value {
             }
         }
     })
+}
+
+fn code_flows(diagnostic: &Diagnostic) -> Value {
+    if diagnostic.call_path.is_empty() {
+        return json!([]);
+    }
+
+    let locations = diagnostic
+        .call_path
+        .iter()
+        .map(|frame| {
+            json!({
+                "location": {
+                    "message": {
+                        "text": &frame.function
+                    },
+                    "physicalLocation": {
+                        "artifactLocation": {
+                            "uri": &frame.file
+                        },
+                        "region": {
+                            "startLine": frame.line,
+                            "startColumn": 1
+                        }
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!([{
+        "threadFlows": [{
+            "locations": locations
+        }]
+    }])
 }
 
 fn sarif_level(severity: Severity) -> &'static str {
