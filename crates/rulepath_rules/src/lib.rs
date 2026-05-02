@@ -577,10 +577,13 @@ fn is_sensitive_mutation(operation: &OperationFact, config: &ResolvedConfig) -> 
 }
 
 fn observed_labels(evidence: &[&EvidenceFact]) -> Vec<String> {
-    evidence
+    let mut labels = evidence
         .iter()
         .map(|evidence| evidence.label.clone())
-        .collect()
+        .collect::<Vec<_>>();
+    labels.sort();
+    labels.dedup();
+    labels
 }
 
 #[cfg(test)]

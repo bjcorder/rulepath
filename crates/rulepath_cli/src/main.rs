@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -7,7 +7,9 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use rulepath_config::{starter_config, validate_config, ResolvedConfig};
 use rulepath_ir::{Confidence, Diagnostic, DiagnosticKind, Severity};
+use rulepath_parsers::{extract_suppressions_from_text, SuppressionFact, SuppressionScope};
 use rulepath_reporters::{build_report, render_json, render_text, Report};
+use rulepath_workspace::WorkspaceIndex;
 use serde::{Deserialize, Serialize};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -220,9 +222,88 @@ fn run_scan(path: &Path) -> Result<ScanResult> {
     let config = rulepath_config::load_project_config(path)?;
     let index = rulepath_workspace::scan_workspace(path, &config)?;
     let ir = rulepath_dataflow::build_project_ir(&index, &config);
-    let diagnostics = rulepath_rules::evaluate(&ir, &config);
+    let diagnostics = apply_suppressions(rulepath_rules::evaluate(&ir, &config), &index, &config)?;
     let report = build_report(VERSION, diagnostics);
     Ok(ScanResult { config, report })
+}
+
+fn apply_suppressions(
+    diagnostics: Vec<Diagnostic>,
+    index: &WorkspaceIndex,
+    config: &ResolvedConfig,
+) -> Result<Vec<Diagnostic>> {
+    let suppressions = collect_suppressions(index);
+    validate_suppressions(&suppressions, config)?;
+    Ok(diagnostics
+        .into_iter()
+        .filter(|diagnostic| !is_suppressed(diagnostic, &suppressions))
+        .collect())
+}
+
+fn collect_suppressions(index: &WorkspaceIndex) -> BTreeMap<String, Vec<SuppressionFact>> {
+    let mut suppressions = BTreeMap::new();
+    for file in &index.files {
+        let file_suppressions = extract_suppressions_from_text(&file.relative_path, &file.text);
+        if !file_suppressions.is_empty() {
+            suppressions.insert(file.relative_path.clone(), file_suppressions);
+        }
+    }
+    suppressions
+}
+
+fn validate_suppressions(
+    suppressions: &BTreeMap<String, Vec<SuppressionFact>>,
+    config: &ResolvedConfig,
+) -> Result<()> {
+    if !config.raw.suppressions.require_reason {
+        return Ok(());
+    }
+    for suppression in suppressions.values().flatten() {
+        if suppression.scope == SuppressionScope::Enable {
+            continue;
+        }
+        let reason = suppression.reason.as_deref().unwrap_or_default();
+        if reason.chars().count() < config.raw.suppressions.min_reason_length {
+            bail!(
+                "invalid suppression for {} at {}:{}: reason must be at least {} characters",
+                suppression.rule_id,
+                suppression.span.file_id,
+                suppression.span.start.line,
+                config.raw.suppressions.min_reason_length
+            );
+        }
+    }
+    Ok(())
+}
+
+fn is_suppressed(
+    diagnostic: &Diagnostic,
+    suppressions: &BTreeMap<String, Vec<SuppressionFact>>,
+) -> bool {
+    let Some(span) = diagnostic.primary_span.as_ref() else {
+        return false;
+    };
+    let Some(file_suppressions) = suppressions.get(&span.file_id) else {
+        return false;
+    };
+    let line = span.start.line;
+    let mut block_disabled = false;
+
+    for suppression in file_suppressions {
+        if suppression.rule_id != diagnostic.rule_id {
+            continue;
+        }
+        let suppression_line = suppression.span.start.line;
+        match suppression.scope {
+            SuppressionScope::NextLine if suppression_line + 1 == line => return true,
+            SuppressionScope::Line if suppression_line == line => return true,
+            SuppressionScope::Block if suppression_line <= line => block_disabled = true,
+            SuppressionScope::Enable if suppression_line <= line => block_disabled = false,
+            _ => {}
+        }
+    }
+
+    block_disabled
 }
 
 fn should_fail_ci(path: &Path, config: &ResolvedConfig, report: &Report) -> Result<bool> {

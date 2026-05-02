@@ -21,6 +21,7 @@ rulepath_config = { path = "../rulepath_config" }
 rulepath_dataflow = { path = "../rulepath_dataflow" }
 rulepath_infer = { path = "../rulepath_infer" }
 rulepath_ir = { path = "../rulepath_ir" }
+rulepath_parsers = { path = "../rulepath_parsers" }
 rulepath_reporters = { path = "../rulepath_reporters" }
 rulepath_rules = { path = "../rulepath_rules" }
 rulepath_sarif = { path = "../rulepath_sarif" }

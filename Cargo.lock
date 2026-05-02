@@ -830,6 +830,7 @@ dependencies = [
  "rulepath_dataflow",
  "rulepath_infer",
  "rulepath_ir",
+ "rulepath_parsers",
  "rulepath_reporters",
  "rulepath_rules",
  "rulepath_sarif",

@@ -111,6 +111,8 @@ Unknown config keys fail validation. Inline suppressions require a reason by def
 const invoice = await prisma.invoice.findUnique({ where: { id } })
 ```
 
+Suppression policy is enforced during scans. A bare suppression fails fast instead of quietly hiding a finding.
+
 ## Output Policy
 
 Rulepath separates high-confidence findings from medium-confidence review hints in every output mode.
