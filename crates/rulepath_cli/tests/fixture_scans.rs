@@ -165,7 +165,7 @@ fn text_output_shows_call_path_frames() {
     let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);
     assert!(stdout.contains("Code path:"));
     assert!(stdout.contains("src/routes/invoices.ts:10 inline_handler()"));
-    assert!(stdout.contains("src/services/invoices.ts:4 updateInvoice()"));
+    assert!(stdout.contains("src/services/invoices.ts:3 updateInvoice()"));
 }
 
 #[test]

@@ -53,4 +53,4 @@ SQLAlchemy extraction is parser-call backed for `session.get`, `select`, `update
 
 Auth, authorization, scope, transaction, invariant, and idempotency evidence is normalized in `rulepath_auth`. Evidence classification is driven by resolved config where possible, with route middleware/dependencies and direct helper calls associated back to the nearest route or sink during IR assembly.
 
-The trace remains intentionally narrow and fixture-backed. Unsupported dynamic dispatch, generated code, or framework behavior should reduce confidence or produce review hints rather than inventing unsupported edges.
+The trace remains intentionally narrow and fixture-backed, but it is import- and symbol-aware for simple local and relative imports. Route-to-service tracing respects `analysis.service_layer_tracing` and `analysis.max_call_depth`; unresolved or ambiguous paths should stay out of high-confidence findings rather than inheriting the first available route.
