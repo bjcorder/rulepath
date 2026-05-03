@@ -130,11 +130,15 @@ fn extract_prisma_operations(
     config: &ResolvedConfig,
 ) -> Vec<OperationFact> {
     let mut operations = Vec::new();
+    let client_names = prisma_client_names(file);
     for call in &parsed.calls {
-        let Some(rest) = call.callee.strip_prefix("prisma.") else {
+        let mut parts = call.callee.split('.');
+        let Some(client) = parts.next() else {
             continue;
         };
-        let mut parts = rest.split('.');
+        if !client_names.iter().any(|name| name == client) {
+            continue;
+        };
         let Some(model) = parts.next() else {
             continue;
         };
@@ -155,8 +159,14 @@ fn extract_prisma_operations(
             resource: resource.clone(),
             operation,
             method: format!("prisma.{model}.{method}"),
-            filters: extract_filters(&resource, &window, config, file),
-            mutation_fields: extract_mutation_fields(&window, file),
+            filters: extract_prisma_filters(
+                &resource,
+                &call.arguments.join(", "),
+                &window,
+                config,
+                file,
+            ),
+            mutation_fields: extract_prisma_mutation_fields(&call.arguments.join(", "), file),
             bulk: matches!(
                 operation,
                 OperationType::BulkUpdate | OperationType::BulkDelete
@@ -165,6 +175,68 @@ fn extract_prisma_operations(
         });
     }
     operations
+}
+
+fn prisma_client_names(file: &SourceFile) -> Vec<String> {
+    let mut names = vec!["prisma".to_owned()];
+    for line in file.text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.contains("PrismaClient") {
+            continue;
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("const ")
+            .or_else(|| trimmed.strip_prefix("let "))
+            .or_else(|| trimmed.strip_prefix("var "))
+        {
+            if let Some(name) = rest
+                .split('=')
+                .next()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn extract_prisma_filters(
+    resource: &str,
+    arguments: &str,
+    window: &str,
+    config: &ResolvedConfig,
+    file: &SourceFile,
+) -> Vec<FilterFact> {
+    let where_section = object_section(arguments, "where").unwrap_or(arguments);
+    let mut filters = Vec::new();
+    if contains_id_filter(where_section) {
+        filters.push(FilterFact {
+            field: "id".to_owned(),
+            value: request_controlled_value(where_section),
+            source_id: Some(format!("source:{}:route_param", file.relative_path)),
+        });
+    }
+    for field in config.tenant_fields_for(resource) {
+        if where_section.contains(&field) || window.contains(&field) {
+            filters.push(FilterFact {
+                field,
+                value: "current principal scope".to_owned(),
+                source_id: None,
+            });
+        }
+    }
+    filters
+}
+
+fn extract_prisma_mutation_fields(arguments: &str, file: &SourceFile) -> Vec<MutationFieldFact> {
+    let Some(data_section) = object_section(arguments, "data") else {
+        return Vec::new();
+    };
+    extract_mutation_fields(data_section, file)
 }
 
 fn extract_sqlalchemy_operations(
@@ -286,7 +358,13 @@ fn extract_filters(
 
 fn extract_mutation_fields(window: &str, file: &SourceFile) -> Vec<MutationFieldFact> {
     let mut fields = Vec::new();
-    if window.contains("data: body")
+    let trimmed = window
+        .trim()
+        .trim_matches(|character| character == '{' || character == '}');
+    if matches!(
+        trimmed,
+        "body" | "req.body" | "request.body" | "request.data"
+    ) || window.contains("data: body")
         || window.contains("data: req.body")
         || window.contains("data: request.body")
         || window.contains("request.data")
@@ -317,6 +395,47 @@ fn extract_mutation_fields(window: &str, file: &SourceFile) -> Vec<MutationField
         }
     }
     fields
+}
+
+fn object_section<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    let key_index = text.find(key)?;
+    let after_key = &text[key_index + key.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let open = after_colon.chars().next()?;
+    if open != '{' {
+        return Some(after_colon.split(',').next().unwrap_or(after_colon).trim());
+    }
+    let mut depth = 0usize;
+    for (index, character) in after_colon.char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(&after_colon[..=index]);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(after_colon)
+}
+
+fn request_controlled_value(text: &str) -> String {
+    for candidate in [
+        "req.params",
+        "params",
+        "invoice_id",
+        "client_id",
+        "id",
+        "request.path_params",
+    ] {
+        if text.contains(candidate) {
+            return candidate.to_owned();
+        }
+    }
+    "request-controlled id".to_owned()
 }
 
 fn contains_id_filter(window: &str) -> bool {
@@ -439,5 +558,76 @@ mod tests {
         let operations = extract_prisma_operations(&file, &parsed, &empty_config());
         assert_eq!(operations[0].resource, "Invoice");
         assert_eq!(operations[0].operation, OperationType::Update);
+    }
+
+    #[test]
+    fn prisma_extraction_handles_alias_nested_where_and_data_without_select_noise() {
+        let file = SourceFile {
+            path: "src/services/invoices.ts".into(),
+            relative_path: "src/services/invoices.ts".to_owned(),
+            language: Language::TypeScript,
+            text: "const db = new PrismaClient()\nreturn db.invoice.update({ where: { id: req.params.invoiceId, tenantId: req.user.tenantId }, data: { status: req.body.status }, select: { id: true } })".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::TypeScript,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![CallFact {
+                callee: "db.invoice.update".to_owned(),
+                arguments: vec![
+                    "{ where: { id: req.params.invoiceId, tenantId: req.user.tenantId }, data: { status: req.body.status }, select: { id: true } }".to_owned(),
+                ],
+                span: SourceSpan::single_line("src/services/invoices.ts", 2),
+            }],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_prisma_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].method, "prisma.invoice.update");
+        assert!(operations[0]
+            .filters
+            .iter()
+            .any(|filter| filter.field == "id" && filter.value == "req.params"));
+        assert!(operations[0]
+            .filters
+            .iter()
+            .any(|filter| filter.field == "tenantId"));
+        assert_eq!(operations[0].mutation_fields[0].field, "status");
+    }
+
+    #[test]
+    fn prisma_extraction_marks_bulk_operations() {
+        let file = SourceFile {
+            path: "src/services/invoices.ts".into(),
+            relative_path: "src/services/invoices.ts".to_owned(),
+            language: Language::TypeScript,
+            text: String::new(),
+        };
+        let parsed = ParsedFile {
+            language: Language::TypeScript,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![
+                CallFact {
+                    callee: "prisma.invoice.updateMany".to_owned(),
+                    arguments: vec!["{ where: { clientId }, data: req.body }".to_owned()],
+                    span: SourceSpan::single_line("src/services/invoices.ts", 3),
+                },
+                CallFact {
+                    callee: "prisma.invoice.deleteMany".to_owned(),
+                    arguments: vec!["{ where: { clientId } }".to_owned()],
+                    span: SourceSpan::single_line("src/services/invoices.ts", 4),
+                },
+            ],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_prisma_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].operation, OperationType::BulkUpdate);
+        assert!(operations[0].bulk);
+        assert_eq!(operations[1].operation, OperationType::BulkDelete);
+        assert!(operations[1].bulk);
     }
 }
