@@ -47,4 +47,10 @@ Uncertainty should reduce confidence or produce review hints.
 
 The current analyzer builds a conservative trace index from parser-backed symbols and calls. Framework and data-layer adapters consume those parsed facts through deterministic registries, then dataflow connects route request sources to operations when parsed calls cross from route handlers into service functions.
 
-The trace remains intentionally narrow and fixture-backed. Unsupported dynamic dispatch, generated code, or framework behavior should reduce confidence or produce review hints rather than inventing unsupported edges.
+Prisma extraction is parser-call backed and recognizes configured client aliases, supported CRUD and bulk methods, nested `where` filters, and `data` mutation payloads while ignoring projection-only `select` and `include` arguments.
+
+SQLAlchemy extraction is parser-call backed for `session.get`, `select`, `update`, `delete`, and `session.execute(...)` wrappers. Object assignment followed by `session.commit()` is modeled as a mutation so request-body field flows are visible to rules.
+
+Auth, authorization, scope, transaction, invariant, and idempotency evidence is normalized in `rulepath_auth`. Evidence classification is driven by resolved config where possible, with route middleware/dependencies and direct helper calls associated back to the nearest route or sink during IR assembly.
+
+The trace remains intentionally narrow and fixture-backed, but it is import- and symbol-aware for simple local and relative imports. Route-to-service tracing respects `analysis.service_layer_tracing` and `analysis.max_call_depth`; unresolved or ambiguous paths should stay out of high-confidence findings rather than inheriting the first available route.

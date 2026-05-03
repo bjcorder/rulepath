@@ -87,7 +87,9 @@ fn render_diagnostic_detail(diagnostic: &Diagnostic) -> String {
         for frame in &diagnostic.call_path {
             output.push_str(&format!(
                 "  {}:{} {}()\n",
-                frame.file, frame.line, frame.function
+                normalized_path(&frame.file),
+                frame.line,
+                frame.function
             ));
         }
     } else if let Some(call_path_id) = &diagnostic.call_path_id {
@@ -121,6 +123,10 @@ fn render_diagnostic_detail(diagnostic: &Diagnostic) -> String {
         output.push_str(&format!("\nSuggested fix:\n  {fix}\n"));
     }
     output
+}
+
+fn normalized_path(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 fn severity_label(severity: Severity) -> &'static str {

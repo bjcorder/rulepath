@@ -31,6 +31,14 @@ Rulepath v1 targets internally developed web applications:
 
 Normal scans must not require Python, Node, Docker, network access, or a TypeScript compiler process.
 
+## Analysis Model
+
+Rulepath scans source code through Rust-native parser adapters. TypeScript uses Oxc-backed parsing and Python uses tree-sitter-backed parsing to produce normalized facts for imports, symbols, calls, spans, and suppressions.
+
+Framework adapters convert parsed facts into routes, handlers, middleware/dependencies, and request sources. Data-layer adapters convert parsed calls into operations, filters, mutation fields, bulk flags, and sink spans for Prisma, SQLAlchemy, and Django ORM.
+
+Evidence normalization is config-driven. Authentication guards, authorization helpers, tenant expressions, object-scope checks, transaction markers, invariant helpers, and idempotency helpers are normalized before rule evaluation. Service tracing builds an import- and symbol-aware call graph and respects `analysis.service_layer_tracing` and `analysis.max_call_depth`.
+
 ## Build From Source
 
 ```bash

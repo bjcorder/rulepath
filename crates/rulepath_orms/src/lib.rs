@@ -130,11 +130,15 @@ fn extract_prisma_operations(
     config: &ResolvedConfig,
 ) -> Vec<OperationFact> {
     let mut operations = Vec::new();
+    let client_names = prisma_client_names(file);
     for call in &parsed.calls {
-        let Some(rest) = call.callee.strip_prefix("prisma.") else {
+        let mut parts = call.callee.split('.');
+        let Some(client) = parts.next() else {
             continue;
         };
-        let mut parts = rest.split('.');
+        if !client_names.iter().any(|name| name == client) {
+            continue;
+        };
         let Some(model) = parts.next() else {
             continue;
         };
@@ -155,7 +159,115 @@ fn extract_prisma_operations(
             resource: resource.clone(),
             operation,
             method: format!("prisma.{model}.{method}"),
-            filters: extract_filters(&resource, &window, config, file),
+            filters: extract_prisma_filters(
+                &resource,
+                &call.arguments.join(", "),
+                &window,
+                config,
+                file,
+            ),
+            mutation_fields: extract_prisma_mutation_fields(&call.arguments.join(", "), file),
+            bulk: matches!(
+                operation,
+                OperationType::BulkUpdate | OperationType::BulkDelete
+            ),
+            span: call.span.clone(),
+        });
+    }
+    operations
+}
+
+fn prisma_client_names(file: &SourceFile) -> Vec<String> {
+    let mut names = vec!["prisma".to_owned()];
+    for line in file.text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.contains("PrismaClient") {
+            continue;
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("const ")
+            .or_else(|| trimmed.strip_prefix("let "))
+            .or_else(|| trimmed.strip_prefix("var "))
+        {
+            if let Some(name) = rest
+                .split('=')
+                .next()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn extract_prisma_filters(
+    resource: &str,
+    arguments: &str,
+    window: &str,
+    config: &ResolvedConfig,
+    file: &SourceFile,
+) -> Vec<FilterFact> {
+    let where_section = object_section(arguments, "where").unwrap_or(arguments);
+    let mut filters = Vec::new();
+    if contains_id_filter(where_section) {
+        filters.push(FilterFact {
+            field: "id".to_owned(),
+            value: request_controlled_value(where_section),
+            source_id: Some(format!("source:{}:route_param", file.relative_path)),
+        });
+    }
+    for field in config.tenant_fields_for(resource) {
+        if where_section.contains(&field) || window.contains(&field) {
+            filters.push(FilterFact {
+                field,
+                value: "current principal scope".to_owned(),
+                source_id: None,
+            });
+        }
+    }
+    filters
+}
+
+fn extract_prisma_mutation_fields(arguments: &str, file: &SourceFile) -> Vec<MutationFieldFact> {
+    let Some(data_section) = object_section(arguments, "data") else {
+        return Vec::new();
+    };
+    extract_mutation_fields(data_section, file)
+}
+
+fn extract_sqlalchemy_operations(
+    file: &SourceFile,
+    parsed: &ParsedFile,
+    config: &ResolvedConfig,
+) -> Vec<OperationFact> {
+    let mut operations = Vec::new();
+    for call in &parsed.calls {
+        let Some((resource, method, operation_hint)) = sqlalchemy_call_shape(call) else {
+            continue;
+        };
+        let window = surrounding_window_for_line(&file.text, call.span.start.line, 500);
+        let operation = if operation_hint == OperationType::Read
+            && window.contains("session.commit")
+            && contains_body_assignment(&window)
+        {
+            OperationType::Update
+        } else {
+            operation_hint
+        };
+        operations.push(OperationFact {
+            id: format!(
+                "sink:sqlalchemy.{resource}.{method}:{}:{}",
+                file.relative_path, call.span.start.line
+            ),
+            data_layer: DataLayer::SqlAlchemy,
+            resource: resource.clone(),
+            operation,
+            method,
+            filters: extract_sqlalchemy_filters(&resource, &call.arguments, &window, config, file),
             mutation_fields: extract_mutation_fields(&window, file),
             bulk: matches!(
                 operation,
@@ -167,52 +279,112 @@ fn extract_prisma_operations(
     operations
 }
 
-fn extract_sqlalchemy_operations(
-    file: &SourceFile,
-    parsed: &ParsedFile,
-    config: &ResolvedConfig,
-) -> Vec<OperationFact> {
-    let mut operations = Vec::new();
-    for call in &parsed.calls {
-        let marker = call.callee.as_str();
-        if !matches!(marker, "session.get" | "select" | "update" | "delete") {
-            continue;
-        }
-        let Some(resource) = call
+fn sqlalchemy_call_shape(
+    call: &rulepath_parsers::CallFact,
+) -> Option<(String, String, OperationType)> {
+    match call.callee.as_str() {
+        "session.get" => call.arguments.first().map(|resource| {
+            (
+                resource.trim().to_owned(),
+                "session.get".to_owned(),
+                OperationType::Read,
+            )
+        }),
+        "select" => call.arguments.first().map(|resource| {
+            (
+                resource.trim().to_owned(),
+                "select".to_owned(),
+                OperationType::Read,
+            )
+        }),
+        "update" => call.arguments.first().map(|resource| {
+            (
+                resource.trim().to_owned(),
+                "update".to_owned(),
+                OperationType::BulkUpdate,
+            )
+        }),
+        "delete" => call.arguments.first().map(|resource| {
+            (
+                resource.trim().to_owned(),
+                "delete".to_owned(),
+                OperationType::BulkDelete,
+            )
+        }),
+        "session.execute" => call
             .arguments
             .first()
-            .map(|argument| argument.trim())
-            .filter(|argument| !argument.is_empty())
-        else {
-            continue;
-        };
-        let window = surrounding_window_for_line(&file.text, call.span.start.line, 500);
-        let operation = if marker == "delete" {
-            OperationType::Delete
-        } else if marker == "update"
-            || window.contains("session.commit")
-            || window.contains("body.status")
-        {
-            OperationType::Update
-        } else {
-            OperationType::Read
-        };
-        operations.push(OperationFact {
-            id: format!(
-                "sink:sqlalchemy.{resource}.{marker}:{}:{}",
-                file.relative_path, call.span.start.line
-            ),
-            data_layer: DataLayer::SqlAlchemy,
-            resource: resource.to_owned(),
-            operation,
-            method: marker.to_owned(),
-            filters: extract_filters(resource, &window, config, file),
-            mutation_fields: extract_mutation_fields(&window, file),
-            bulk: marker == "update" || marker == "delete",
-            span: call.span.clone(),
+            .and_then(|argument| sqlalchemy_execute_shape(argument)),
+        _ => None,
+    }
+}
+
+fn sqlalchemy_execute_shape(argument: &str) -> Option<(String, String, OperationType)> {
+    for (prefix, operation) in [
+        ("select(", OperationType::Read),
+        ("update(", OperationType::BulkUpdate),
+        ("delete(", OperationType::BulkDelete),
+    ] {
+        if let Some(rest) = argument.trim().strip_prefix(prefix) {
+            let resource = rest.split([')', ',', '.']).next()?.trim();
+            if !resource.is_empty() {
+                return Some((
+                    resource.to_owned(),
+                    prefix.trim_end_matches('(').to_owned(),
+                    operation,
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn extract_sqlalchemy_filters(
+    resource: &str,
+    arguments: &[String],
+    window: &str,
+    config: &ResolvedConfig,
+    file: &SourceFile,
+) -> Vec<FilterFact> {
+    let mut filters = Vec::new();
+    if arguments
+        .get(1)
+        .is_some_and(|argument| is_request_controlled_id_expression(argument))
+        || contains_id_filter(window)
+    {
+        filters.push(FilterFact {
+            field: "id".to_owned(),
+            value: arguments
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| request_controlled_value(window)),
+            source_id: Some(format!("source:{}:route_param", file.relative_path)),
         });
     }
-    operations
+    for field in config.tenant_fields_for(resource) {
+        if window.contains(&field) {
+            filters.push(FilterFact {
+                field,
+                value: "current principal scope".to_owned(),
+                source_id: None,
+            });
+        }
+    }
+    filters
+}
+
+fn is_request_controlled_id_expression(argument: &str) -> bool {
+    let trimmed = argument.trim();
+    trimmed == "id"
+        || trimmed.ends_with("_id")
+        || trimmed.ends_with("Id")
+        || trimmed.contains("params")
+}
+
+fn contains_body_assignment(window: &str) -> bool {
+    window
+        .lines()
+        .any(|line| line.contains(" = body.") || line.contains(" = request.data"))
 }
 
 fn extract_django_orm_operations(file: &SourceFile, config: &ResolvedConfig) -> Vec<OperationFact> {
@@ -286,7 +458,13 @@ fn extract_filters(
 
 fn extract_mutation_fields(window: &str, file: &SourceFile) -> Vec<MutationFieldFact> {
     let mut fields = Vec::new();
-    if window.contains("data: body")
+    let trimmed = window
+        .trim()
+        .trim_matches(|character| character == '{' || character == '}');
+    if matches!(
+        trimmed,
+        "body" | "req.body" | "request.body" | "request.data"
+    ) || window.contains("data: body")
         || window.contains("data: req.body")
         || window.contains("data: request.body")
         || window.contains("request.data")
@@ -316,7 +494,79 @@ fn extract_mutation_fields(window: &str, file: &SourceFile) -> Vec<MutationField
             });
         }
     }
+    for field in assignment_mutation_fields(window) {
+        if !fields.iter().any(|existing| existing.field == field) {
+            fields.push(MutationFieldFact {
+                field: field.clone(),
+                value: format!("body.{field}"),
+                source_id: Some(format!("source:{}:body", file.relative_path)),
+            });
+        }
+    }
     fields
+}
+
+fn assignment_mutation_fields(window: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    for line in window.lines() {
+        let trimmed = line.trim();
+        if !(trimmed.contains(" = body.") || trimmed.contains(" = request.data")) {
+            continue;
+        }
+        let Some(left) = trimmed.split('=').next().map(str::trim) else {
+            continue;
+        };
+        let Some(field) = left.rsplit('.').next() else {
+            continue;
+        };
+        if !field.is_empty() {
+            fields.push(field.to_owned());
+        }
+    }
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
+fn object_section<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    let key_index = text.find(key)?;
+    let after_key = &text[key_index + key.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let open = after_colon.chars().next()?;
+    if open != '{' {
+        return Some(after_colon.split(',').next().unwrap_or(after_colon).trim());
+    }
+    let mut depth = 0usize;
+    for (index, character) in after_colon.char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(&after_colon[..=index]);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(after_colon)
+}
+
+fn request_controlled_value(text: &str) -> String {
+    for candidate in [
+        "req.params",
+        "params",
+        "invoice_id",
+        "client_id",
+        "id",
+        "request.path_params",
+    ] {
+        if text.contains(candidate) {
+            return candidate.to_owned();
+        }
+    }
+    "request-controlled id".to_owned()
 }
 
 fn contains_id_filter(window: &str) -> bool {
@@ -439,5 +689,145 @@ mod tests {
         let operations = extract_prisma_operations(&file, &parsed, &empty_config());
         assert_eq!(operations[0].resource, "Invoice");
         assert_eq!(operations[0].operation, OperationType::Update);
+    }
+
+    #[test]
+    fn prisma_extraction_handles_alias_nested_where_and_data_without_select_noise() {
+        let file = SourceFile {
+            path: "src/services/invoices.ts".into(),
+            relative_path: "src/services/invoices.ts".to_owned(),
+            language: Language::TypeScript,
+            text: "const db = new PrismaClient()\nreturn db.invoice.update({ where: { id: req.params.invoiceId, tenantId: req.user.tenantId }, data: { status: req.body.status }, select: { id: true } })".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::TypeScript,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![CallFact {
+                callee: "db.invoice.update".to_owned(),
+                arguments: vec![
+                    "{ where: { id: req.params.invoiceId, tenantId: req.user.tenantId }, data: { status: req.body.status }, select: { id: true } }".to_owned(),
+                ],
+                span: SourceSpan::single_line("src/services/invoices.ts", 2),
+            }],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_prisma_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].method, "prisma.invoice.update");
+        assert!(operations[0]
+            .filters
+            .iter()
+            .any(|filter| filter.field == "id" && filter.value == "req.params"));
+        assert!(operations[0]
+            .filters
+            .iter()
+            .any(|filter| filter.field == "tenantId"));
+        assert_eq!(operations[0].mutation_fields[0].field, "status");
+    }
+
+    #[test]
+    fn prisma_extraction_marks_bulk_operations() {
+        let file = SourceFile {
+            path: "src/services/invoices.ts".into(),
+            relative_path: "src/services/invoices.ts".to_owned(),
+            language: Language::TypeScript,
+            text: String::new(),
+        };
+        let parsed = ParsedFile {
+            language: Language::TypeScript,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![
+                CallFact {
+                    callee: "prisma.invoice.updateMany".to_owned(),
+                    arguments: vec!["{ where: { clientId }, data: req.body }".to_owned()],
+                    span: SourceSpan::single_line("src/services/invoices.ts", 3),
+                },
+                CallFact {
+                    callee: "prisma.invoice.deleteMany".to_owned(),
+                    arguments: vec!["{ where: { clientId } }".to_owned()],
+                    span: SourceSpan::single_line("src/services/invoices.ts", 4),
+                },
+            ],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_prisma_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].operation, OperationType::BulkUpdate);
+        assert!(operations[0].bulk);
+        assert_eq!(operations[1].operation, OperationType::BulkDelete);
+        assert!(operations[1].bulk);
+    }
+
+    #[test]
+    fn sqlalchemy_session_get_and_object_assignment_becomes_update() {
+        let file = SourceFile {
+            path: "app/invoice_service.py".into(),
+            relative_path: "app/invoice_service.py".to_owned(),
+            language: Language::Python,
+            text: "def update_invoice(invoice_id, body):\n    invoice = session.get(Invoice, invoice_id)\n    invoice.status = body.status\n    session.commit()\n".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::Python,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![CallFact {
+                callee: "session.get".to_owned(),
+                arguments: vec!["Invoice".to_owned(), "invoice_id".to_owned()],
+                span: SourceSpan::single_line("app/invoice_service.py", 2),
+            }],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_sqlalchemy_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].operation, OperationType::Update);
+        assert!(operations[0]
+            .filters
+            .iter()
+            .any(|filter| filter.field == "id" && filter.value == "invoice_id"));
+        assert_eq!(operations[0].mutation_fields[0].field, "status");
+    }
+
+    #[test]
+    fn sqlalchemy_core_bulk_operations_are_marked() {
+        let file = SourceFile {
+            path: "app/invoice_service.py".into(),
+            relative_path: "app/invoice_service.py".to_owned(),
+            language: Language::Python,
+            text: "session.execute(update(Invoice).where(Invoice.client_id == client_id).values(status=body.status))\nsession.execute(delete(Invoice).where(Invoice.client_id == client_id))".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::Python,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![
+                CallFact {
+                    callee: "session.execute".to_owned(),
+                    arguments: vec![
+                        "update(Invoice).where(Invoice.client_id == client_id).values(status=body.status)"
+                            .to_owned(),
+                    ],
+                    span: SourceSpan::single_line("app/invoice_service.py", 1),
+                },
+                CallFact {
+                    callee: "session.execute".to_owned(),
+                    arguments: vec!["delete(Invoice).where(Invoice.client_id == client_id)"
+                        .to_owned()],
+                    span: SourceSpan::single_line("app/invoice_service.py", 2),
+                },
+            ],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_sqlalchemy_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].operation, OperationType::BulkUpdate);
+        assert!(operations[0].bulk);
+        assert_eq!(operations[1].operation, OperationType::BulkDelete);
+        assert!(operations[1].bulk);
     }
 }

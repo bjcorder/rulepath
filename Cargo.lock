@@ -854,6 +854,8 @@ version = "0.1.0"
 dependencies = [
  "rulepath_config",
  "rulepath_ir",
+ "rulepath_parsers",
+ "rulepath_workspace",
 ]
 
 [[package]]
@@ -894,6 +896,7 @@ name = "rulepath_dataflow"
 version = "0.1.0"
 dependencies = [
  "petgraph",
+ "rulepath_auth",
  "rulepath_config",
  "rulepath_frameworks",
  "rulepath_ir",

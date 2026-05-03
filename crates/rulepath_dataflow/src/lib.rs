@@ -18,12 +18,12 @@ pub fn build_project_ir(index: &WorkspaceIndex, config: &ResolvedConfig) -> Proj
         ir: ProjectIr::default(),
     };
 
-    collect_framework_and_auth_facts(&mut context);
+    collect_framework_and_auth_facts(&mut context, config);
     collect_operation_facts(&mut context, config);
 
     let trace_index = build_trace_index(context.index, &context.parsed_files, &context.ir);
     attach_route_evidence(&mut context.ir);
-    attach_call_paths(&mut context.ir, &trace_index);
+    attach_call_paths(&mut context.ir, &trace_index, config);
     rewrite_operation_sources_to_route_sources(&mut context.ir);
     sort_project_ir(&mut context.ir);
     context.ir
@@ -50,7 +50,7 @@ fn built_in_language_adapters() -> Vec<Box<dyn LanguageAdapter>> {
     ]
 }
 
-fn collect_framework_and_auth_facts(context: &mut ScanContext<'_>) {
+fn collect_framework_and_auth_facts(context: &mut ScanContext<'_>, config: &ResolvedConfig) {
     for file in &context.index.files {
         let Some(parsed) = parsed_for_file(&context.parsed_files, &file.relative_path) else {
             continue;
@@ -64,8 +64,15 @@ fn collect_framework_and_auth_facts(context: &mut ScanContext<'_>) {
         context
             .ir
             .evidence
-            .extend(rulepath_frameworks::extract_auth_evidence(file, parsed));
+            .extend(rulepath_auth::normalize_file_evidence(file, parsed, config));
     }
+    context
+        .ir
+        .evidence
+        .extend(rulepath_auth::normalize_route_evidence(
+            &context.ir.routes,
+            config,
+        ));
 }
 
 fn collect_operation_facts(context: &mut ScanContext<'_>, config: &ResolvedConfig) {
@@ -109,29 +116,18 @@ fn attach_route_evidence(ir: &mut ProjectIr) {
     }
 }
 
-fn attach_call_paths(ir: &mut ProjectIr, trace_index: &TraceIndex) {
+fn attach_call_paths(ir: &mut ProjectIr, trace_index: &TraceIndex, config: &ResolvedConfig) {
     for operation in &ir.operations {
         let operation_function = trace_index.function_for_span(&operation.span);
         let Some(route_match) =
-            find_route_for_operation(ir, trace_index, operation, operation_function)
+            find_route_for_operation(ir, trace_index, operation, operation_function, config)
         else {
             continue;
         };
         let route = route_match.route;
-        let mut frames = vec![CallFrame {
-            function: route.handler.clone(),
-            file: route.span.file_id.clone(),
-            line: route.span.start.line,
-        }];
-        if operation.span.file_id.as_str() != route.span.file_id.as_str() {
-            frames.push(CallFrame {
-                function: operation_function
-                    .map(|function| function.name.clone())
-                    .unwrap_or_else(|| "service_or_repository".to_owned()),
-                file: operation.span.file_id.clone(),
-                line: operation.span.start.line,
-            });
-        }
+        let frames = route_match
+            .frames
+            .unwrap_or_else(|| fallback_frames(route, operation, operation_function));
         ir.call_paths.push(CallPath {
             id: format!("callpath:{}:{}", route.id, operation.id),
             route_id: route.id.clone(),
@@ -200,6 +196,7 @@ fn find_route_for_operation<'a>(
     trace_index: &TraceIndex,
     operation: &OperationFact,
     operation_function: Option<&FunctionSpan>,
+    config: &ResolvedConfig,
 ) -> Option<RouteMatch<'a>> {
     if let Some(route) = ir
         .routes
@@ -209,45 +206,67 @@ fn find_route_for_operation<'a>(
         return Some(RouteMatch {
             route,
             confidence: Confidence::High,
+            frames: None,
         });
     }
 
+    if !config.raw.analysis.service_layer_tracing {
+        return None;
+    }
+
     if let Some(function) = operation_function {
-        if let Some(route_call) = trace_index.route_calls.iter().find(|call| {
-            call.callee == function.name
-                || call
-                    .callee
-                    .rsplit('.')
-                    .next()
-                    .is_some_and(|last_segment| last_segment == function.name)
-        }) {
+        if let Some(route_trace) =
+            trace_index.find_route_trace(function, config.raw.analysis.max_call_depth)
+        {
             return ir
                 .routes
                 .iter()
-                .find(|route| route.id == route_call.route_id)
+                .find(|route| route.id == route_trace.route_id)
                 .map(|route| RouteMatch {
                     route,
                     confidence: Confidence::High,
+                    frames: Some(route_trace.frames),
                 });
         }
     }
-
-    ir.routes.first().map(|route| RouteMatch {
-        route,
-        confidence: Confidence::Low,
-    })
+    None
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+fn fallback_frames(
+    route: &RouteFact,
+    operation: &OperationFact,
+    operation_function: Option<&FunctionSpan>,
+) -> Vec<CallFrame> {
+    let mut frames = vec![CallFrame {
+        function: route.handler.clone(),
+        file: route.span.file_id.clone(),
+        line: route.span.start.line,
+    }];
+    if operation.span.file_id.as_str() != route.span.file_id.as_str() {
+        frames.push(CallFrame {
+            function: operation_function
+                .map(|function| function.name.clone())
+                .unwrap_or_else(|| "service_or_repository".to_owned()),
+            file: operation.span.file_id.clone(),
+            line: operation.span.start.line,
+        });
+    }
+    frames
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RouteMatch<'a> {
     route: &'a RouteFact,
     confidence: Confidence,
+    frames: Option<Vec<CallFrame>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TraceIndex {
     functions: Vec<FunctionSpan>,
     route_calls: Vec<RouteCall>,
+    function_calls: Vec<FunctionCall>,
+    imports: Vec<ResolvedImport>,
 }
 
 impl TraceIndex {
@@ -257,6 +276,108 @@ impl TraceIndex {
                 && function.start_line <= span.start.line
                 && function.end_line >= span.start.line
         })
+    }
+
+    fn find_route_trace(&self, target: &FunctionSpan, max_depth: usize) -> Option<RouteTrace> {
+        let mut matches = Vec::new();
+        for route_call in &self.route_calls {
+            for candidate in self.resolve_callee(&route_call.file_id, &route_call.callee) {
+                let frames = vec![route_call.frame.clone(), function_frame(candidate)];
+                self.walk_function(
+                    candidate,
+                    target,
+                    max_depth,
+                    frames,
+                    &mut Vec::new(),
+                    &mut matches,
+                    route_call.route_id.clone(),
+                );
+            }
+        }
+        matches.sort_by(|left, right| {
+            left.route_id
+                .cmp(&right.route_id)
+                .then(left.frames.len().cmp(&right.frames.len()))
+        });
+        matches.into_iter().next()
+    }
+
+    fn walk_function(
+        &self,
+        current: &FunctionSpan,
+        target: &FunctionSpan,
+        remaining_depth: usize,
+        frames: Vec<CallFrame>,
+        visited: &mut Vec<String>,
+        matches: &mut Vec<RouteTrace>,
+        route_id: String,
+    ) {
+        if current == target {
+            matches.push(RouteTrace { route_id, frames });
+            return;
+        }
+        if remaining_depth == 0 {
+            return;
+        }
+        let current_key = current.key();
+        if visited.iter().any(|item| item == &current_key) {
+            return;
+        }
+        visited.push(current_key);
+        for call in self
+            .function_calls
+            .iter()
+            .filter(|call| call.caller == *current)
+        {
+            for next in self.resolve_callee(&call.caller.file_id, &call.callee) {
+                let mut next_frames = frames.clone();
+                next_frames.push(function_frame(next));
+                self.walk_function(
+                    next,
+                    target,
+                    remaining_depth.saturating_sub(1),
+                    next_frames,
+                    visited,
+                    matches,
+                    route_id.clone(),
+                );
+            }
+        }
+        visited.pop();
+    }
+
+    fn resolve_callee(&self, caller_file: &str, callee: &str) -> Vec<&FunctionSpan> {
+        let last = callee.rsplit('.').next().unwrap_or(callee);
+        let mut candidates = self
+            .functions
+            .iter()
+            .filter(|function| function.file_id == caller_file && function.name == last)
+            .collect::<Vec<_>>();
+        for import in self
+            .imports
+            .iter()
+            .filter(|import| import.file_id == caller_file)
+        {
+            if import.local_name == callee || import.local_name == last {
+                candidates.extend(self.functions.iter().filter(|function| {
+                    function.file_id == import.target_file_id
+                        && (import.imported_name.as_deref() == Some(function.name.as_str())
+                            || function.name == last
+                            || import.imported_name.is_none())
+                }));
+            } else if callee.starts_with(&format!("{}.", import.local_name)) {
+                candidates.extend(self.functions.iter().filter(|function| {
+                    function.file_id == import.target_file_id && function.name == last
+                }));
+            }
+        }
+        candidates.sort_by(|left, right| {
+            left.file_id
+                .cmp(&right.file_id)
+                .then(left.name.cmp(&right.name))
+        });
+        candidates.dedup_by(|left, right| left.file_id == right.file_id && left.name == right.name);
+        candidates
     }
 }
 
@@ -268,10 +389,38 @@ struct FunctionSpan {
     end_line: usize,
 }
 
+impl FunctionSpan {
+    fn key(&self) -> String {
+        format!("{}:{}:{}", self.file_id, self.name, self.start_line)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RouteCall {
     route_id: String,
+    file_id: String,
     callee: String,
+    frame: CallFrame,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FunctionCall {
+    caller: FunctionSpan,
+    callee: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedImport {
+    file_id: String,
+    local_name: String,
+    imported_name: Option<String>,
+    target_file_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RouteTrace {
+    route_id: String,
+    frames: Vec<CallFrame>,
 }
 
 fn build_trace_index(
@@ -295,9 +444,19 @@ fn build_trace_index(
         })
         .flatten()
         .collect::<Vec<_>>();
+    let function_calls = parsed_files
+        .iter()
+        .flat_map(|parsed| extract_function_calls(parsed, &functions))
+        .collect::<Vec<_>>();
+    let imports = parsed_files
+        .iter()
+        .flat_map(|parsed| resolve_imports(parsed, index))
+        .collect::<Vec<_>>();
     TraceIndex {
         functions,
         route_calls,
+        function_calls,
+        imports,
     }
 }
 
@@ -334,6 +493,32 @@ fn assign_function_ends(index: &WorkspaceIndex, functions: &mut [FunctionSpan]) 
     }
 }
 
+fn extract_function_calls(parsed: &ParsedFile, functions: &[FunctionSpan]) -> Vec<FunctionCall> {
+    let file_functions = functions
+        .iter()
+        .filter(|function| function.file_id == parsed.file_id)
+        .collect::<Vec<_>>();
+    parsed
+        .calls
+        .iter()
+        .filter(|call| is_trace_candidate(call.callee.as_str()))
+        .filter_map(|call| {
+            let caller = file_functions
+                .iter()
+                .find(|function| {
+                    function.start_line <= call.span.start.line
+                        && function.end_line >= call.span.start.line
+                })?
+                .to_owned()
+                .clone();
+            Some(FunctionCall {
+                caller,
+                callee: call.callee.clone(),
+            })
+        })
+        .collect()
+}
+
 fn extract_route_calls(parsed: &ParsedFile, route: &RouteFact) -> Vec<RouteCall> {
     let max_line = route.span.start.line.saturating_add(40);
     parsed
@@ -345,9 +530,134 @@ fn extract_route_calls(parsed: &ParsedFile, route: &RouteFact) -> Vec<RouteCall>
         .filter(|call| is_trace_candidate(call.callee.as_str()))
         .map(|call| RouteCall {
             route_id: route.id.clone(),
+            file_id: route.span.file_id.clone(),
             callee: call.callee.clone(),
+            frame: CallFrame {
+                function: route.handler.clone(),
+                file: route.span.file_id.clone(),
+                line: route.span.start.line,
+            },
         })
         .collect()
+}
+
+fn resolve_imports(parsed: &ParsedFile, index: &WorkspaceIndex) -> Vec<ResolvedImport> {
+    let mut resolved = Vec::new();
+    for import in &parsed.imports {
+        let target_file_id =
+            resolve_module_path(parsed.file_id.as_str(), import.module.as_str(), index);
+        if import.names.is_empty() {
+            let Some(target_file_id) = target_file_id else {
+                continue;
+            };
+            if let Some(local_name) = module_local_name(import.module.as_str()) {
+                resolved.push(ResolvedImport {
+                    file_id: parsed.file_id.clone(),
+                    local_name,
+                    imported_name: None,
+                    target_file_id,
+                });
+            }
+            continue;
+        }
+        for name in &import.names {
+            let imported_module_target = if import.module == "." || import.module.ends_with('.') {
+                resolve_module_path(
+                    parsed.file_id.as_str(),
+                    &format!("{}{}", import.module, name),
+                    index,
+                )
+            } else {
+                None
+            };
+            let Some(target_file_id) = imported_module_target
+                .clone()
+                .or_else(|| target_file_id.clone())
+            else {
+                continue;
+            };
+            resolved.push(ResolvedImport {
+                file_id: parsed.file_id.clone(),
+                local_name: name.clone(),
+                imported_name: imported_module_target.is_none().then(|| name.clone()),
+                target_file_id,
+            });
+        }
+    }
+    resolved
+}
+
+fn resolve_module_path(
+    importer_file_id: &str,
+    module: &str,
+    index: &WorkspaceIndex,
+) -> Option<String> {
+    if !module.starts_with('.') {
+        return None;
+    }
+    let importer_dir = importer_file_id.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let mut parts = importer_dir
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let normalized_module = normalize_relative_module(module);
+    for part in normalized_module.split('/') {
+        match part {
+            "." | "" => {}
+            ".." => {
+                parts.pop();
+            }
+            item => parts.push(item),
+        }
+    }
+    let stem = parts.join("/");
+    [
+        format!("{stem}.ts"),
+        format!("{stem}.tsx"),
+        format!("{stem}.js"),
+        format!("{stem}.jsx"),
+        format!("{stem}.py"),
+        format!("{stem}/index.ts"),
+        format!("{stem}/index.tsx"),
+        format!("{stem}/__init__.py"),
+    ]
+    .into_iter()
+    .find(|candidate| {
+        index
+            .files
+            .iter()
+            .any(|file| file.relative_path == *candidate)
+    })
+}
+
+fn normalize_relative_module(module: &str) -> String {
+    let leading_dots = module
+        .chars()
+        .take_while(|character| *character == '.')
+        .count();
+    let rest = module[leading_dots..].replace('.', "/");
+    let dots = ".".repeat(leading_dots);
+    if rest.is_empty() || rest.starts_with('/') {
+        format!("{dots}{rest}")
+    } else {
+        format!("{dots}/{rest}")
+    }
+}
+
+fn module_local_name(module: &str) -> Option<String> {
+    module
+        .trim_matches('.')
+        .rsplit(['/', '.'])
+        .find(|segment| !segment.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn function_frame(function: &FunctionSpan) -> CallFrame {
+    CallFrame {
+        function: function.name.clone(),
+        file: function.file_id.clone(),
+        line: function.start_line,
+    }
 }
 
 fn is_trace_candidate(callee: &str) -> bool {
@@ -392,8 +702,8 @@ fn span_key(span: &SourceSpan) -> (&str, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rulepath_ir::{Language, Position};
-    use rulepath_parsers::{CallFact, SymbolFact};
+    use rulepath_ir::{DataLayer, Language, OperationFact, OperationType, Position};
+    use rulepath_parsers::{CallFact, ImportFact, SymbolFact};
     use rulepath_workspace::SourceFile;
 
     #[test]
@@ -465,6 +775,186 @@ mod tests {
         let trace = build_trace_index(&index, &[parsed], &ir);
         assert_eq!(trace.functions[0].name, "routeHandler");
         assert_eq!(trace.route_calls[0].callee, "updateInvoice");
+    }
+
+    #[test]
+    fn call_graph_resolves_imports_and_two_hop_paths() {
+        let index = WorkspaceIndex {
+            root: ".".into(),
+            files: vec![
+                SourceFile {
+                    path: "src/routes/invoices.ts".into(),
+                    relative_path: "src/routes/invoices.ts".to_owned(),
+                    language: Language::TypeScript,
+                    text: "router.patch('/x', () => updateInvoice())\n".to_owned(),
+                },
+                SourceFile {
+                    path: "src/services/invoices.ts".into(),
+                    relative_path: "src/services/invoices.ts".to_owned(),
+                    language: Language::TypeScript,
+                    text: "import { writeInvoice } from '../repositories/invoices'\n\nfunction updateInvoice() {\n  writeInvoice()\n}\n".to_owned(),
+                },
+                SourceFile {
+                    path: "src/repositories/invoices.ts".into(),
+                    relative_path: "src/repositories/invoices.ts".to_owned(),
+                    language: Language::TypeScript,
+                    text: "function writeInvoice() {\n  prisma.invoice.update()\n}\n".to_owned(),
+                },
+            ],
+        };
+        let parsed = vec![
+            ParsedFile {
+                language: Language::TypeScript,
+                file_id: "src/routes/invoices.ts".to_owned(),
+                imports: vec![ImportFact {
+                    module: "../services/invoices".to_owned(),
+                    names: vec!["updateInvoice".to_owned()],
+                    span: SourceSpan::single_line("src/routes/invoices.ts", 1),
+                }],
+                symbols: Vec::new(),
+                calls: vec![CallFact {
+                    callee: "updateInvoice".to_owned(),
+                    arguments: Vec::new(),
+                    span: SourceSpan::single_line("src/routes/invoices.ts", 5),
+                }],
+                suppressions: Vec::new(),
+            },
+            ParsedFile {
+                language: Language::TypeScript,
+                file_id: "src/services/invoices.ts".to_owned(),
+                imports: vec![ImportFact {
+                    module: "../repositories/invoices".to_owned(),
+                    names: vec!["writeInvoice".to_owned()],
+                    span: SourceSpan::single_line("src/services/invoices.ts", 1),
+                }],
+                symbols: vec![SymbolFact {
+                    name: "updateInvoice".to_owned(),
+                    kind: SymbolKind::Function,
+                    span: SourceSpan::single_line("src/services/invoices.ts", 3),
+                }],
+                calls: vec![CallFact {
+                    callee: "writeInvoice".to_owned(),
+                    arguments: Vec::new(),
+                    span: SourceSpan::single_line("src/services/invoices.ts", 4),
+                }],
+                suppressions: Vec::new(),
+            },
+            ParsedFile {
+                language: Language::TypeScript,
+                file_id: "src/repositories/invoices.ts".to_owned(),
+                imports: Vec::new(),
+                symbols: vec![SymbolFact {
+                    name: "writeInvoice".to_owned(),
+                    kind: SymbolKind::Function,
+                    span: SourceSpan::single_line("src/repositories/invoices.ts", 2),
+                }],
+                calls: Vec::new(),
+                suppressions: Vec::new(),
+            },
+        ];
+        let ir = ProjectIr {
+            routes: vec![RouteFact {
+                id: "route:test".to_owned(),
+                framework: rulepath_ir::Framework::Express,
+                language: Language::TypeScript,
+                method: "PATCH".to_owned(),
+                path: "/invoices/:id".to_owned(),
+                handler: "inline_handler".to_owned(),
+                span: SourceSpan::single_line("src/routes/invoices.ts", 4),
+                middleware: Vec::new(),
+                sources: Vec::new(),
+            }],
+            operations: vec![OperationFact {
+                id: "sink:test".to_owned(),
+                data_layer: DataLayer::Prisma,
+                resource: "Invoice".to_owned(),
+                operation: OperationType::Update,
+                method: "prisma.invoice.update".to_owned(),
+                filters: Vec::new(),
+                mutation_fields: Vec::new(),
+                bulk: false,
+                span: SourceSpan::single_line("src/repositories/invoices.ts", 3),
+            }],
+            ..ProjectIr::default()
+        };
+
+        let trace = build_trace_index(&index, &parsed, &ir);
+        let operation_function = trace
+            .function_for_span(&ir.operations[0].span)
+            .expect("operation should be inside repository function");
+        let route_trace = trace
+            .find_route_trace(operation_function, 2)
+            .expect("two-hop route trace should resolve");
+        assert_eq!(
+            route_trace
+                .frames
+                .iter()
+                .map(|frame| frame.function.as_str())
+                .collect::<Vec<_>>(),
+            vec!["inline_handler", "updateInvoice", "writeInvoice"]
+        );
+        assert!(trace.find_route_trace(operation_function, 0).is_none());
+    }
+
+    #[test]
+    fn service_layer_tracing_can_be_disabled() {
+        let mut config = rulepath_config::default_resolved_config();
+        config.raw.analysis.service_layer_tracing = false;
+        let ir = ProjectIr {
+            routes: vec![RouteFact {
+                id: "route:test".to_owned(),
+                framework: rulepath_ir::Framework::Express,
+                language: Language::TypeScript,
+                method: "PATCH".to_owned(),
+                path: "/invoices/:id".to_owned(),
+                handler: "inline_handler".to_owned(),
+                span: SourceSpan::single_line("src/routes/invoices.ts", 4),
+                middleware: Vec::new(),
+                sources: Vec::new(),
+            }],
+            operations: vec![OperationFact {
+                id: "sink:test".to_owned(),
+                data_layer: DataLayer::Prisma,
+                resource: "Invoice".to_owned(),
+                operation: OperationType::Update,
+                method: "prisma.invoice.update".to_owned(),
+                filters: Vec::new(),
+                mutation_fields: Vec::new(),
+                bulk: false,
+                span: SourceSpan::single_line("src/services/invoices.ts", 3),
+            }],
+            ..ProjectIr::default()
+        };
+        let trace = TraceIndex {
+            functions: vec![FunctionSpan {
+                file_id: "src/services/invoices.ts".to_owned(),
+                name: "updateInvoice".to_owned(),
+                start_line: 1,
+                end_line: 5,
+            }],
+            route_calls: vec![RouteCall {
+                route_id: "route:test".to_owned(),
+                file_id: "src/routes/invoices.ts".to_owned(),
+                callee: "updateInvoice".to_owned(),
+                frame: CallFrame {
+                    function: "inline_handler".to_owned(),
+                    file: "src/routes/invoices.ts".to_owned(),
+                    line: 4,
+                },
+            }],
+            function_calls: Vec::new(),
+            imports: Vec::new(),
+        };
+        let operation_function = trace.function_for_span(&ir.operations[0].span);
+
+        assert!(find_route_for_operation(
+            &ir,
+            &trace,
+            &ir.operations[0],
+            operation_function,
+            &config
+        )
+        .is_none());
     }
 
     #[test]
