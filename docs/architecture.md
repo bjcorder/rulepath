@@ -60,4 +60,4 @@ Normal scans must stay Rust-native. Optional sidecars may be added later only fo
 13. Apply baseline and CI policy.
 14. Emit reports.
 
-Framework and data-layer extraction is registered by adapter descriptors, so scan orchestration does not need framework-specific or ORM-specific lexical logic. `rulepath_dataflow` owns the scan context, route-to-operation source propagation, and deterministic IR assembly.
+Framework and data-layer extraction is registered by adapter descriptors, so scan orchestration does not need framework-specific or ORM-specific lexical logic. Framework adapters own route, handler, middleware/dependency, and request-source facts. `rulepath_dataflow` owns the scan context, route-to-operation source propagation, and deterministic IR assembly.
