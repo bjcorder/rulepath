@@ -22,6 +22,8 @@ fixtures/
 
 Each fixture should be small, readable, and focused on one analysis behavior.
 
+Language adapters also carry parser-level unit coverage for imports, symbols, calls, decorators, and suppressions. Fixture scans should assert the end-to-end path: parser facts, framework route extraction, data-layer operation extraction, trace propagation, and final findings.
+
 ## Required Scenarios
 
 Each fixture family should cover:

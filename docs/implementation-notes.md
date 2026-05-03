@@ -45,4 +45,6 @@ Uncertainty should reduce confidence or produce review hints.
 
 ## Current Trace Foundation
 
-The first analyzer slice builds a conservative trace index from route bodies, simple function spans, and service calls. Sinks discovered in service files are connected back to route request sources when the route calls the enclosing service function. This is intentionally narrow and fixture-backed; deeper parser-backed symbol resolution should replace these heuristics over time.
+The current analyzer builds a conservative trace index from parser-backed symbols and calls. Framework and data-layer adapters consume those parsed facts through deterministic registries, then dataflow connects route request sources to operations when parsed calls cross from route handlers into service functions.
+
+The trace remains intentionally narrow and fixture-backed. Unsupported dynamic dispatch, generated code, or framework behavior should reduce confidence or produce review hints rather than inventing unsupported edges.

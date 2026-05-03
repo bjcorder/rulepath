@@ -317,7 +317,7 @@ fn method_name(line: &str) -> Option<String> {
         .last()
         .unwrap_or_default()
         .trim_start_matches("async ");
-    (!name.is_empty()).then(|| name.to_owned())
+    (!name.is_empty() && !name.contains('.')).then(|| name.to_owned())
 }
 
 fn extract_calls(file: &SourceFile) -> Vec<CallFact> {

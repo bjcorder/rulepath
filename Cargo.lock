@@ -895,7 +895,12 @@ version = "0.1.0"
 dependencies = [
  "petgraph",
  "rulepath_config",
+ "rulepath_frameworks",
  "rulepath_ir",
+ "rulepath_lang_python",
+ "rulepath_lang_typescript",
+ "rulepath_orms",
+ "rulepath_parsers",
  "rulepath_workspace",
 ]
 
@@ -914,6 +919,7 @@ version = "0.1.0"
 dependencies = [
  "rulepath_ir",
  "rulepath_parsers",
+ "rulepath_workspace",
 ]
 
 [[package]]
@@ -961,8 +967,10 @@ dependencies = [
 name = "rulepath_orms"
 version = "0.1.0"
 dependencies = [
+ "rulepath_config",
  "rulepath_ir",
  "rulepath_parsers",
+ "rulepath_workspace",
 ]
 
 [[package]]

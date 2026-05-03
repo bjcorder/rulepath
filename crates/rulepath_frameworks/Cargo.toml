@@ -10,6 +10,7 @@ description = "Framework adapter registry for Rulepath."
 [dependencies]
 rulepath_ir = { path = "../rulepath_ir" }
 rulepath_parsers = { path = "../rulepath_parsers" }
+rulepath_workspace = { path = "../rulepath_workspace" }
 
 [lints]
 workspace = true
