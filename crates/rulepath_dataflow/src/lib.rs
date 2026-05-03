@@ -18,7 +18,7 @@ pub fn build_project_ir(index: &WorkspaceIndex, config: &ResolvedConfig) -> Proj
         ir: ProjectIr::default(),
     };
 
-    collect_framework_and_auth_facts(&mut context);
+    collect_framework_and_auth_facts(&mut context, config);
     collect_operation_facts(&mut context, config);
 
     let trace_index = build_trace_index(context.index, &context.parsed_files, &context.ir);
@@ -50,7 +50,7 @@ fn built_in_language_adapters() -> Vec<Box<dyn LanguageAdapter>> {
     ]
 }
 
-fn collect_framework_and_auth_facts(context: &mut ScanContext<'_>) {
+fn collect_framework_and_auth_facts(context: &mut ScanContext<'_>, config: &ResolvedConfig) {
     for file in &context.index.files {
         let Some(parsed) = parsed_for_file(&context.parsed_files, &file.relative_path) else {
             continue;
@@ -64,8 +64,15 @@ fn collect_framework_and_auth_facts(context: &mut ScanContext<'_>) {
         context
             .ir
             .evidence
-            .extend(rulepath_frameworks::extract_auth_evidence(file, parsed));
+            .extend(rulepath_auth::normalize_file_evidence(file, parsed, config));
     }
+    context
+        .ir
+        .evidence
+        .extend(rulepath_auth::normalize_route_evidence(
+            &context.ir.routes,
+            config,
+        ));
 }
 
 fn collect_operation_facts(context: &mut ScanContext<'_>, config: &ResolvedConfig) {

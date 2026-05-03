@@ -9,6 +9,7 @@ description = "Route-to-sink tracing and initial IR construction for Rulepath."
 
 [dependencies]
 petgraph.workspace = true
+rulepath_auth = { path = "../rulepath_auth" }
 rulepath_config = { path = "../rulepath_config" }
 rulepath_frameworks = { path = "../rulepath_frameworks" }
 rulepath_ir = { path = "../rulepath_ir" }

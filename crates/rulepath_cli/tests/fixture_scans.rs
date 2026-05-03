@@ -135,6 +135,31 @@ fn fastapi_service_sink_uses_route_request_sources() {
 }
 
 #[test]
+fn json_output_includes_observed_evidence_labels() {
+    let path = fixture_path("fixtures/express_prisma/unsafe");
+    let stdout = run_rulepath(&[
+        "scan",
+        path.to_str().expect("utf-8 fixture path"),
+        "--format",
+        "json",
+    ]);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("json output should parse");
+    let finding = json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .iter()
+        .find(|finding| finding["rule_id"] == "INV001")
+        .expect("INV001 should be emitted");
+    let observed = finding["observed_evidence"]
+        .as_array()
+        .expect("observed evidence should be an array")
+        .iter()
+        .map(|value| value.as_str().expect("evidence label should be a string"))
+        .collect::<Vec<_>>();
+    assert!(observed.contains(&"authentication:requireAuth"));
+}
+
+#[test]
 fn text_output_shows_call_path_frames() {
     let path = fixture_path("fixtures/express_prisma/unsafe");
     let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);

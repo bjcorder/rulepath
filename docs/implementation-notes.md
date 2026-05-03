@@ -51,4 +51,6 @@ Prisma extraction is parser-call backed and recognizes configured client aliases
 
 SQLAlchemy extraction is parser-call backed for `session.get`, `select`, `update`, `delete`, and `session.execute(...)` wrappers. Object assignment followed by `session.commit()` is modeled as a mutation so request-body field flows are visible to rules.
 
+Auth, authorization, scope, transaction, invariant, and idempotency evidence is normalized in `rulepath_auth`. Evidence classification is driven by resolved config where possible, with route middleware/dependencies and direct helper calls associated back to the nearest route or sink during IR assembly.
+
 The trace remains intentionally narrow and fixture-backed. Unsupported dynamic dispatch, generated code, or framework behavior should reduce confidence or produce review hints rather than inventing unsupported edges.

@@ -10,6 +10,8 @@ description = "Authentication and authorization evidence normalization for Rulep
 [dependencies]
 rulepath_config = { path = "../rulepath_config" }
 rulepath_ir = { path = "../rulepath_ir" }
+rulepath_parsers = { path = "../rulepath_parsers" }
+rulepath_workspace = { path = "../rulepath_workspace" }
 
 [lints]
 workspace = true
