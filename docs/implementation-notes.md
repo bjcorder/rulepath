@@ -49,4 +49,6 @@ The current analyzer builds a conservative trace index from parser-backed symbol
 
 Prisma extraction is parser-call backed and recognizes configured client aliases, supported CRUD and bulk methods, nested `where` filters, and `data` mutation payloads while ignoring projection-only `select` and `include` arguments.
 
+SQLAlchemy extraction is parser-call backed for `session.get`, `select`, `update`, `delete`, and `session.execute(...)` wrappers. Object assignment followed by `session.commit()` is modeled as a mutation so request-body field flows are visible to rules.
+
 The trace remains intentionally narrow and fixture-backed. Unsupported dynamic dispatch, generated code, or framework behavior should reduce confidence or produce review hints rather than inventing unsupported edges.
