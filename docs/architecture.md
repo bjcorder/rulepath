@@ -6,8 +6,9 @@ Rulepath is a Rust workspace organized around fact extraction, normalization, tr
 source files
   -> parser adapters
   -> language facts
-  -> framework adapters
-  -> data-layer adapters
+  -> framework adapter registry
+  -> data-layer adapter registry
+  -> scan context
   -> auth evidence normalization
   -> service-layer tracing
   -> common IR
@@ -47,10 +48,10 @@ Normal scans must stay Rust-native. Optional sidecars may be added later only fo
 1. Load and validate config.
 2. Merge the configured profile.
 3. Build a workspace file index.
-4. Parse source files in parallel.
-5. Extract language facts.
-6. Extract framework route facts.
-7. Extract data-layer sink facts.
+4. Parse supported source files into language facts.
+5. Run framework adapters over parsed facts.
+6. Run data-layer adapters over parsed facts.
+7. Build a scan context from workspace, parsed facts, and extracted IR facts.
 8. Normalize auth evidence.
 9. Trace route-to-sink call paths.
 10. Build common IR.
@@ -58,3 +59,5 @@ Normal scans must stay Rust-native. Optional sidecars may be added later only fo
 12. Evaluate rules.
 13. Apply baseline and CI policy.
 14. Emit reports.
+
+Framework and data-layer extraction is registered by adapter descriptors, so scan orchestration does not need framework-specific or ORM-specific lexical logic. `rulepath_dataflow` owns the scan context, route-to-operation source propagation, and deterministic IR assembly.
