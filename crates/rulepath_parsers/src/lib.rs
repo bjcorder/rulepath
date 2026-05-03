@@ -66,6 +66,31 @@ pub trait LanguageAdapter {
 }
 
 #[must_use]
+pub fn span_for_offsets(file_id: &str, text: &str, start: usize, end: usize) -> SourceSpan {
+    SourceSpan {
+        file_id: file_id.to_owned(),
+        start: position_for_offset(text, start),
+        end: position_for_offset(text, end),
+    }
+}
+
+#[must_use]
+pub fn position_for_offset(text: &str, offset: usize) -> rulepath_ir::Position {
+    let bounded = offset.min(text.len());
+    let mut line = 1;
+    let mut column = 1;
+    for character in text[..bounded].chars() {
+        if character == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    rulepath_ir::Position::new(line, column)
+}
+
+#[must_use]
 pub fn extract_suppressions_from_text(file_id: &str, text: &str) -> Vec<SuppressionFact> {
     text.lines()
         .enumerate()

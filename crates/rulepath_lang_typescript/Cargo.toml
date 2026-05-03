@@ -9,11 +9,13 @@ description = "TypeScript language adapter for Rulepath."
 
 [features]
 default = ["oxc-backend"]
-oxc-backend = ["dep:oxc_ast", "dep:oxc_parser"]
+oxc-backend = ["dep:oxc_allocator", "dep:oxc_ast", "dep:oxc_parser", "dep:oxc_span"]
 
 [dependencies]
+oxc_allocator = { workspace = true, optional = true }
 oxc_ast = { workspace = true, optional = true }
 oxc_parser = { workspace = true, optional = true }
+oxc_span = { workspace = true, optional = true }
 rulepath_ir = { path = "../rulepath_ir" }
 rulepath_parsers = { path = "../rulepath_parsers" }
 rulepath_workspace = { path = "../rulepath_workspace" }
