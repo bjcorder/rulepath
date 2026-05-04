@@ -787,9 +787,25 @@ fn surrounding_window_for_line(text: &str, line: usize, radius: usize) -> String
 }
 
 fn surrounding_window_for_offset(text: &str, offset: usize, radius: usize) -> String {
-    let start = offset.saturating_sub(radius);
-    let end = (offset + radius).min(text.len());
+    let start = previous_char_boundary(text, offset.saturating_sub(radius));
+    let end = next_char_boundary(text, offset.saturating_add(radius).min(text.len()));
     text[start..end].to_owned()
+}
+
+fn previous_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn next_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index < text.len() && !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
 }
 
 fn prisma_operation(method: &str) -> Option<OperationType> {
@@ -1145,5 +1161,51 @@ mod tests {
             .mutation_fields
             .iter()
             .any(|field| field.field == "*" && field.source_id.is_some()));
+    }
+
+    #[test]
+    fn source_windows_keep_utf8_boundaries() {
+        let prefix = "é".repeat(260);
+        let text = format!("{prefix}\nInvoice.objects.get(id=self.kwargs[\"pk\"])\n");
+        let offset = text
+            .find("Invoice.objects.get")
+            .expect("fixture should include ORM call");
+
+        let window = surrounding_window_for_offset(&text, offset, 500);
+
+        assert!(window.contains("Invoice.objects.get"));
+        assert!(window.is_char_boundary(window.len()));
+    }
+
+    #[test]
+    fn django_orm_extraction_handles_non_ascii_context() {
+        let prefix = "é".repeat(260);
+        let file = SourceFile {
+            path: "app/views.py".into(),
+            relative_path: "app/views.py".to_owned(),
+            language: Language::Python,
+            text: format!("{prefix}\nInvoice.objects.get(id=self.kwargs[\"pk\"])\n"),
+        };
+        let parsed = ParsedFile {
+            language: Language::Python,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![CallFact {
+                callee: "Invoice.objects.get".to_owned(),
+                arguments: vec!["id=self.kwargs[\"pk\"]".to_owned()],
+                span: SourceSpan::single_line("app/views.py", 2),
+            }],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_django_orm_operations(&file, &parsed, &empty_config());
+
+        assert_eq!(operations[0].resource, "Invoice");
+        assert_eq!(operations[0].operation, OperationType::Read);
+        assert!(operations[0]
+            .filters
+            .iter()
+            .any(|filter| filter.field == "id" && filter.source_id.is_some()));
     }
 }
