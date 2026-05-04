@@ -252,31 +252,144 @@ fn extract_fastapi(file: &SourceFile, parsed: &ParsedFile, route_offset: usize) 
 }
 
 fn extract_nextjs(file: &SourceFile, parsed: &ParsedFile, route_offset: usize) -> FrameworkFacts {
-    if file.language != Language::TypeScript
-        || (!file.relative_path.contains("app/api/") && !file.relative_path.contains("pages/api/"))
-    {
+    if file.language != Language::TypeScript {
         return FrameworkFacts::default();
     }
     let mut facts = FrameworkFacts::default();
-    for symbol in &parsed.symbols {
-        if matches!(
-            symbol.name.as_str(),
-            "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
-        ) {
-            push_route(
-                file,
-                &mut facts,
-                Framework::NextJs,
-                symbol.name.clone(),
-                path_from_nextjs_file(file.relative_path.as_str()),
-                symbol.name.clone(),
-                Vec::new(),
-                symbol.span.clone(),
-                route_offset,
-            );
+
+    if is_nextjs_app_route_file(file.relative_path.as_str()) {
+        for symbol in &parsed.symbols {
+            if is_nextjs_http_method(symbol.name.as_str())
+                && is_exported_nextjs_symbol(file, symbol)
+            {
+                push_route(
+                    file,
+                    &mut facts,
+                    Framework::NextJs,
+                    symbol.name.clone(),
+                    path_from_nextjs_file(file.relative_path.as_str()),
+                    symbol.name.clone(),
+                    Vec::new(),
+                    symbol.span.clone(),
+                    route_offset,
+                );
+            }
+        }
+    } else if is_nextjs_pages_api_file(file.relative_path.as_str()) {
+        if let Some((handler, span)) = nextjs_pages_handler(file, parsed) {
+            for method in nextjs_pages_methods(file) {
+                push_route(
+                    file,
+                    &mut facts,
+                    Framework::NextJs,
+                    method,
+                    path_from_nextjs_file(file.relative_path.as_str()),
+                    handler.clone(),
+                    Vec::new(),
+                    span.clone(),
+                    route_offset,
+                );
+            }
         }
     }
+
     facts
+}
+
+fn is_nextjs_app_route_file(relative_path: &str) -> bool {
+    let path = relative_path.replace('\\', "/");
+    (path.contains("/app/api/") || path.starts_with("app/api/"))
+        && nextjs_route_file_suffix(path.as_str()).is_some()
+}
+
+fn is_nextjs_pages_api_file(relative_path: &str) -> bool {
+    let path = relative_path.replace('\\', "/");
+    (path.contains("/pages/api/") || path.starts_with("pages/api/"))
+        && nextjs_file_extension(path.as_str()).is_some()
+        && !path.ends_with(".d.ts")
+}
+
+fn nextjs_route_file_suffix(path: &str) -> Option<&'static str> {
+    ["/route.ts", "/route.tsx", "/route.js", "/route.jsx"]
+        .into_iter()
+        .find(|suffix| path.ends_with(suffix))
+}
+
+fn nextjs_file_extension(path: &str) -> Option<&'static str> {
+    [".ts", ".tsx", ".js", ".jsx"]
+        .into_iter()
+        .find(|suffix| path.ends_with(suffix))
+}
+
+fn is_nextjs_http_method(method: &str) -> bool {
+    matches!(
+        method,
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+    )
+}
+
+fn is_exported_nextjs_symbol(file: &SourceFile, symbol: &rulepath_parsers::SymbolFact) -> bool {
+    let line = file
+        .text
+        .lines()
+        .nth(symbol.span.start.line.saturating_sub(1))
+        .unwrap_or_default();
+    line.contains("export ")
+        || file.text.contains(&format!("export {{ {} }}", symbol.name))
+        || file.text.contains(&format!("export {{{}}}", symbol.name))
+}
+
+fn nextjs_pages_handler(file: &SourceFile, parsed: &ParsedFile) -> Option<(String, SourceSpan)> {
+    if let Some(symbol) = parsed
+        .symbols
+        .iter()
+        .find(|symbol| is_default_exported_pages_handler(file, symbol.name.as_str()))
+        .or_else(|| {
+            parsed
+                .symbols
+                .iter()
+                .find(|symbol| symbol.name == "handler")
+        })
+        .or_else(|| parsed.symbols.first())
+    {
+        return Some((symbol.name.clone(), symbol.span.clone()));
+    }
+
+    file.text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("export default"))
+        .map(|(index, _)| {
+            (
+                "default_handler".to_owned(),
+                SourceSpan::single_line(file.relative_path.as_str(), index + 1),
+            )
+        })
+}
+
+fn is_default_exported_pages_handler(file: &SourceFile, name: &str) -> bool {
+    file.text.lines().any(|line| {
+        let trimmed = line.trim();
+        (trimmed.starts_with("export default") && trimmed.contains(name))
+            || trimmed == format!("export default {name}")
+            || trimmed == format!("export default {name};")
+    })
+}
+
+fn nextjs_pages_methods(file: &SourceFile) -> Vec<String> {
+    let mut methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+        .into_iter()
+        .filter(|method| {
+            file.text.contains("method")
+                && (file.text.contains(&format!("'{method}'"))
+                    || file.text.contains(&format!("\"{method}\"")))
+        })
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if methods.is_empty() {
+        methods.push("ANY".to_owned());
+    }
+    methods
 }
 
 fn extract_django_rest_framework(file: &SourceFile, route_offset: usize) -> FrameworkFacts {
@@ -564,14 +677,22 @@ fn param_expression(framework: Framework) -> String {
 }
 
 fn path_from_nextjs_file(relative_path: &str) -> String {
-    let mut path = relative_path
-        .replace("app/api", "")
-        .replace("pages/api", "")
-        .replace("/route.ts", "")
-        .replace("/route.js", "")
-        .replace(".ts", "")
-        .replace(".js", "");
-    path = path.replace('[', ":").replace(']', "");
+    let mut path = relative_path.replace('\\', "/");
+    if let Some(index) = path.find("app/api") {
+        path = path[index + "app/api".len()..].to_owned();
+        if let Some(suffix) = nextjs_route_file_suffix(path.as_str()) {
+            path.truncate(path.len().saturating_sub(suffix.len()));
+        }
+    } else if let Some(index) = path.find("pages/api") {
+        path = path[index + "pages/api".len()..].to_owned();
+        if let Some(suffix) = nextjs_file_extension(path.as_str()) {
+            path.truncate(path.len().saturating_sub(suffix.len()));
+        }
+        if path.ends_with("/index") {
+            path.truncate(path.len().saturating_sub("/index".len()));
+        }
+    }
+    let path = normalize_nextjs_dynamic_segments(path.as_str());
     if path.is_empty() {
         "/".to_owned()
     } else if path.starts_with('/') {
@@ -579,6 +700,28 @@ fn path_from_nextjs_file(relative_path: &str) -> String {
     } else {
         format!("/{path}")
     }
+}
+
+fn normalize_nextjs_dynamic_segments(path: &str) -> String {
+    path.split('/')
+        .map(|segment| {
+            let normalized = segment
+                .strip_prefix("[[...")
+                .and_then(|rest| rest.strip_suffix("]]"))
+                .or_else(|| {
+                    segment
+                        .strip_prefix("[...")
+                        .and_then(|rest| rest.strip_suffix(']'))
+                })
+                .or_else(|| {
+                    segment
+                        .strip_prefix('[')
+                        .and_then(|rest| rest.strip_suffix(']'))
+                });
+            normalized.map_or_else(|| segment.to_owned(), |name| format!(":{name}"))
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn inferred_django_path(file: &SourceFile) -> String {
@@ -713,6 +856,75 @@ mod tests {
 
         let facts = extract_fastapi(&file, &parsed, 0);
         assert_eq!(facts.routes[0].handler, "update_invoice");
+    }
+
+    #[test]
+    fn nextjs_app_router_discovers_exported_methods_and_dynamic_params() {
+        let file = SourceFile {
+            path: "app/api/invoices/[invoiceId]/route.tsx".into(),
+            relative_path: "app/api/invoices/[invoiceId]/route.tsx".to_owned(),
+            language: Language::TypeScript,
+            text: "export async function PATCH(request: Request, { params }) {\n  return Response.json({ ok: true })\n}\n\nfunction GET() {}\n".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::TypeScript,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: vec![
+                SymbolFact {
+                    name: "PATCH".to_owned(),
+                    kind: SymbolKind::Function,
+                    span: SourceSpan::single_line("app/api/invoices/[invoiceId]/route.tsx", 1),
+                },
+                SymbolFact {
+                    name: "GET".to_owned(),
+                    kind: SymbolKind::Function,
+                    span: SourceSpan::single_line("app/api/invoices/[invoiceId]/route.tsx", 5),
+                },
+            ],
+            calls: Vec::new(),
+            suppressions: Vec::new(),
+        };
+
+        let facts = extract_nextjs(&file, &parsed, 0);
+        assert_eq!(facts.routes.len(), 1);
+        assert_eq!(facts.routes[0].method, "PATCH");
+        assert_eq!(facts.routes[0].path, "/invoices/:invoiceId");
+        let route_param = facts
+            .sources
+            .iter()
+            .find(|source| source.id.ends_with(":route_param"))
+            .expect("route param source should exist");
+        assert_eq!(route_param.name, "invoiceId");
+        assert_eq!(route_param.expression, "params");
+    }
+
+    #[test]
+    fn nextjs_pages_router_discovers_api_handler_and_method() {
+        let file = SourceFile {
+            path: "pages/api/invoices/[invoiceId].ts".into(),
+            relative_path: "pages/api/invoices/[invoiceId].ts".to_owned(),
+            language: Language::TypeScript,
+            text: "export default async function handler(req, res) {\n  if (req.method === 'PATCH') {\n    return res.json({ ok: true })\n  }\n}\n".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::TypeScript,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: vec![SymbolFact {
+                name: "handler".to_owned(),
+                kind: SymbolKind::Function,
+                span: SourceSpan::single_line("pages/api/invoices/[invoiceId].ts", 1),
+            }],
+            calls: Vec::new(),
+            suppressions: Vec::new(),
+        };
+
+        let facts = extract_nextjs(&file, &parsed, 0);
+        assert_eq!(facts.routes.len(), 1);
+        assert_eq!(facts.routes[0].method, "PATCH");
+        assert_eq!(facts.routes[0].path, "/invoices/:invoiceId");
+        assert_eq!(facts.routes[0].handler, "handler");
     }
 
     #[test]

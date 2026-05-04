@@ -55,3 +55,5 @@ It should discover an Express route, trace to a Prisma sink, detect request-cont
 The second milestone mirrors that behavior for FastAPI and SQLAlchemy.
 
 The Django/DRF fixture pair verifies Django ORM extraction. The unsafe fixture should emit unscoped resource access for a request-controlled object lookup, while the safe fixture should remain clean because tenant filtering or object permission evidence is recognized.
+
+The Next.js/Prisma/Auth.js fixture pair verifies App Router route extraction, dynamic `[invoiceId]` source IDs, Auth.js evidence labels, and Prisma mutation findings. The unsafe fixture should emit findings for unscoped access, client-controlled mutation data, and missing operation authorization; the safe fixture should remain clean because Auth.js, permission, tenant, and allowlisted field evidence are present.

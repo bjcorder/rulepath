@@ -98,6 +98,55 @@ fn django_drf_safe_is_clean() {
 }
 
 #[test]
+fn nextjs_prisma_authjs_unsafe_emits_route_sources_and_authjs_evidence() {
+    let path = fixture_path("fixtures/nextjs_prisma_authjs/unsafe");
+    let stdout = run_rulepath(&[
+        "scan",
+        path.to_str().expect("utf-8 fixture path"),
+        "--format",
+        "json",
+    ]);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("json output should parse");
+    let finding = json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .iter()
+        .find(|finding| finding["rule_id"] == "INV001")
+        .expect("INV001 should be emitted");
+
+    assert_eq!(
+        finding["route_id"].as_str(),
+        Some("route:NextJs:PATCH:/invoices/:invoiceId:0")
+    );
+    let source_ids = finding["source_ids"]
+        .as_array()
+        .expect("source_ids should be an array")
+        .iter()
+        .map(|value| value.as_str().expect("source id should be a string"))
+        .collect::<Vec<_>>();
+    assert!(source_ids.contains(&"source:app/api/invoices/[invoiceId]/route.ts:route_param"));
+    assert!(source_ids.contains(&"source:app/api/invoices/[invoiceId]/route.ts:body"));
+    let observed = finding["observed_evidence"]
+        .as_array()
+        .expect("observed evidence should be an array")
+        .iter()
+        .map(|value| value.as_str().expect("evidence label should be a string"))
+        .collect::<Vec<_>>();
+    assert!(observed.contains(&"authentication:auth"));
+    assert_eq!(
+        finding["call_path"][0]["file"].as_str(),
+        Some("app/api/invoices/[invoiceId]/route.ts")
+    );
+}
+
+#[test]
+fn nextjs_prisma_authjs_safe_is_clean() {
+    let path = fixture_path("fixtures/nextjs_prisma_authjs/safe");
+    let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);
+    assert!(stdout.contains("Findings: 0"));
+}
+
+#[test]
 fn traced_service_sink_uses_route_request_sources() {
     let path = fixture_path("fixtures/express_prisma/unsafe");
     let stdout = run_rulepath(&[
