@@ -47,9 +47,10 @@ impl FrameworkAdapter for BuiltInFrameworkAdapter {
         match self.descriptor.id {
             Framework::Express => extract_express(file, parsed, route_offset),
             Framework::FastApi => extract_fastapi(file, parsed, route_offset),
+            Framework::Django => extract_django(file, parsed, route_offset),
             Framework::DjangoRestFramework => extract_django_rest_framework(file, route_offset),
             Framework::NextJs => extract_nextjs(file, parsed, route_offset),
-            Framework::Django | Framework::Unknown => FrameworkFacts::default(),
+            Framework::Unknown => FrameworkFacts::default(),
         }
     }
 }
@@ -398,25 +399,351 @@ fn extract_django_rest_framework(file: &SourceFile, route_offset: usize) -> Fram
     }
     let mut facts = FrameworkFacts::default();
     let lines = file.text.lines().collect::<Vec<_>>();
-    for (line_index, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("class ")
-            && (trimmed.contains("ModelViewSet") || trimmed.contains("APIView"))
-        {
+    for class in django_classes(&lines) {
+        if !class.is_drf_view {
+            continue;
+        }
+        let permission_classes = django_permission_classes(&lines, class.line_index);
+        let methods = django_class_route_methods(&lines, &class);
+        for method in methods {
             push_route(
                 file,
                 &mut facts,
                 Framework::DjangoRestFramework,
-                "GET".to_owned(),
-                inferred_django_path(file),
-                class_name_from_line(line).unwrap_or_else(|| "drf_view".to_owned()),
-                django_permission_classes(&lines, line_index),
-                SourceSpan::single_line(file.relative_path.as_str(), line_index + 1),
+                method.http_method,
+                method
+                    .path
+                    .unwrap_or_else(|| inferred_drf_path(class.name.as_str(), method.detail)),
+                method.handler.unwrap_or_else(|| class.name.clone()),
+                permission_classes.clone(),
+                SourceSpan::single_line(file.relative_path.as_str(), method.line_index + 1),
                 route_offset,
             );
         }
     }
+    for registration in django_router_registrations(file, &lines) {
+        push_route(
+            file,
+            &mut facts,
+            Framework::DjangoRestFramework,
+            "ANY".to_owned(),
+            registration.path,
+            registration.handler,
+            Vec::new(),
+            registration.span,
+            route_offset,
+        );
+    }
     facts
+}
+
+fn extract_django(file: &SourceFile, parsed: &ParsedFile, route_offset: usize) -> FrameworkFacts {
+    if file.language != Language::Python || !file.relative_path.ends_with("urls.py") {
+        return FrameworkFacts::default();
+    }
+    let mut facts = FrameworkFacts::default();
+    for call in &parsed.calls {
+        if !matches!(call.callee.as_str(), "path" | "re_path" | "url") {
+            continue;
+        }
+        let Some(raw_path) = call.arguments.first().and_then(|arg| literal_argument(arg)) else {
+            continue;
+        };
+        let handler = call
+            .arguments
+            .get(1)
+            .and_then(|argument| django_url_handler(argument))
+            .unwrap_or_else(|| "django_view".to_owned());
+        push_route(
+            file,
+            &mut facts,
+            Framework::Django,
+            "ANY".to_owned(),
+            normalize_django_path(raw_path.as_str()),
+            handler,
+            Vec::new(),
+            call.span.clone(),
+            route_offset,
+        );
+    }
+    facts
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DjangoClass {
+    name: String,
+    line_index: usize,
+    end_line_index: usize,
+    indent: usize,
+    is_drf_view: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DjangoRouteMethod {
+    http_method: String,
+    detail: bool,
+    line_index: usize,
+    handler: Option<String>,
+    path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DjangoRouterRegistration {
+    path: String,
+    handler: String,
+    span: SourceSpan,
+}
+
+fn django_classes(lines: &[&str]) -> Vec<DjangoClass> {
+    let mut classes = Vec::new();
+    for (line_index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("class ") {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        let end_line_index = lines
+            .iter()
+            .enumerate()
+            .skip(line_index + 1)
+            .find(|(_, candidate)| {
+                let candidate_trimmed = candidate.trim_start();
+                !candidate_trimmed.is_empty()
+                    && candidate.len() - candidate_trimmed.len() <= indent
+                    && candidate_trimmed.starts_with("class ")
+            })
+            .map_or(lines.len().saturating_sub(1), |(index, _)| {
+                index.saturating_sub(1)
+            });
+        classes.push(DjangoClass {
+            name: class_name_from_line(line).unwrap_or_else(|| "drf_view".to_owned()),
+            line_index,
+            end_line_index,
+            indent,
+            is_drf_view: is_drf_class_line(trimmed),
+        });
+    }
+    classes
+}
+
+fn is_drf_class_line(line: &str) -> bool {
+    [
+        "APIView",
+        "ViewSet",
+        "GenericViewSet",
+        "ModelViewSet",
+        "ReadOnlyModelViewSet",
+    ]
+    .iter()
+    .any(|base| line.contains(base))
+}
+
+fn django_class_route_methods(lines: &[&str], class: &DjangoClass) -> Vec<DjangoRouteMethod> {
+    let mut methods = Vec::new();
+    if class.end_line_index <= class.line_index {
+        methods.push(DjangoRouteMethod {
+            http_method: "GET".to_owned(),
+            detail: true,
+            line_index: class.line_index,
+            handler: Some(class.name.clone()),
+            path: None,
+        });
+        return methods;
+    }
+    for (line_index, line) in lines
+        .iter()
+        .enumerate()
+        .take(class.end_line_index + 1)
+        .skip(class.line_index + 1)
+    {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("def ") && !trimmed.starts_with("async def ") {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        if indent <= class.indent {
+            continue;
+        }
+        let Some(name) = function_name_from_def(trimmed) else {
+            continue;
+        };
+        if let Some((http_method, detail)) = drf_method_for_name(name.as_str()) {
+            methods.push(DjangoRouteMethod {
+                http_method,
+                detail,
+                line_index,
+                handler: Some(format!("{}.{}", class.name, name)),
+                path: None,
+            });
+        } else if let Some(action) =
+            drf_action_for_method(lines, line_index, class.name.as_str(), name.as_str())
+        {
+            methods.extend(action);
+        }
+    }
+    if methods.is_empty() {
+        methods.push(DjangoRouteMethod {
+            http_method: "GET".to_owned(),
+            detail: true,
+            line_index: class.line_index,
+            handler: Some(class.name.clone()),
+            path: None,
+        });
+    }
+    methods
+}
+
+fn drf_method_for_name(name: &str) -> Option<(String, bool)> {
+    match name {
+        "get" | "list" => Some(("GET".to_owned(), false)),
+        "post" | "create" => Some(("POST".to_owned(), false)),
+        "put" | "update" => Some(("PUT".to_owned(), true)),
+        "patch" | "partial_update" => Some(("PATCH".to_owned(), true)),
+        "delete" | "destroy" => Some(("DELETE".to_owned(), true)),
+        "retrieve" | "get_object" | "get_queryset" => Some(("GET".to_owned(), true)),
+        _ => None,
+    }
+}
+
+fn drf_action_for_method(
+    lines: &[&str],
+    method_line_index: usize,
+    class_name: &str,
+    method_name: &str,
+) -> Option<Vec<DjangoRouteMethod>> {
+    let decorator = lines[..method_line_index]
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, line)| line.trim_start().starts_with('@'))
+        .find(|(_, line)| line.trim_start().starts_with("@action"))?;
+    let decorator_text = decorator.1.trim();
+    let detail = !decorator_text.contains("detail=False");
+    let methods = action_http_methods(decorator_text);
+    Some(
+        methods
+            .into_iter()
+            .map(|http_method| DjangoRouteMethod {
+                http_method,
+                detail,
+                line_index: method_line_index,
+                handler: Some(format!("{class_name}.{method_name}")),
+                path: None,
+            })
+            .collect(),
+    )
+}
+
+fn action_http_methods(decorator: &str) -> Vec<String> {
+    let mut methods = ["get", "post", "put", "patch", "delete"]
+        .into_iter()
+        .filter(|method| {
+            decorator.contains(&format!("'{method}'"))
+                || decorator.contains(&format!("\"{method}\""))
+        })
+        .map(|method| method.to_ascii_uppercase())
+        .collect::<Vec<_>>();
+    if methods.is_empty() {
+        methods.push("GET".to_owned());
+    }
+    methods
+}
+
+fn function_name_from_def(line: &str) -> Option<String> {
+    let rest = line
+        .trim_start()
+        .strip_prefix("def ")
+        .or_else(|| line.trim_start().strip_prefix("async def "))?;
+    Some(
+        rest.chars()
+            .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+            .collect(),
+    )
+}
+
+fn django_router_registrations(file: &SourceFile, lines: &[&str]) -> Vec<DjangoRouterRegistration> {
+    let mut registrations = Vec::new();
+    for (line_index, line) in lines.iter().enumerate() {
+        if !line.contains(".register(") {
+            continue;
+        }
+        let Some(open) = line.find(".register(") else {
+            continue;
+        };
+        let args = &line[open + ".register(".len()..];
+        let Some(path) = args.split(',').next().and_then(literal_argument) else {
+            continue;
+        };
+        let handler = args
+            .split(',')
+            .nth(1)
+            .map(str::trim)
+            .filter(|handler| !handler.is_empty())
+            .unwrap_or("ViewSet")
+            .to_owned();
+        registrations.push(DjangoRouterRegistration {
+            path: normalize_django_path(path.as_str()),
+            handler,
+            span: SourceSpan::single_line(file.relative_path.as_str(), line_index + 1),
+        });
+    }
+    registrations
+}
+
+fn django_url_handler(argument: &str) -> Option<String> {
+    let trimmed = argument.trim();
+    if let Some(before) = trimmed.split(".as_view").next() {
+        return Some(before.trim().to_owned());
+    }
+    Some(
+        trimmed
+            .split(['(', ',', ' '])
+            .next()
+            .unwrap_or(trimmed)
+            .trim()
+            .to_owned(),
+    )
+    .filter(|handler| !handler.is_empty())
+}
+
+fn normalize_django_path(path: &str) -> String {
+    let mut normalized = path.trim_matches('/').to_owned();
+    while let Some(open) = normalized.find('<') {
+        let Some(close) = normalized[open + 1..].find('>') else {
+            break;
+        };
+        let close = open + 1 + close;
+        let raw = &normalized[open + 1..close];
+        let name = raw.rsplit(':').next().unwrap_or(raw);
+        normalized.replace_range(open..=close, &format!("{{{name}}}"));
+    }
+    if normalized.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{normalized}")
+    }
+}
+
+fn inferred_drf_path(class_name: &str, detail: bool) -> String {
+    let resource = class_name
+        .trim_end_matches("ViewSet")
+        .trim_end_matches("APIView")
+        .trim_end_matches("View");
+    let mut path = format!("/{}", pluralize(resource).to_ascii_lowercase());
+    if detail {
+        path.push_str("/{pk}");
+    }
+    path
+}
+
+fn pluralize(resource: &str) -> String {
+    if resource.ends_with('s') {
+        resource.to_owned()
+    } else if let Some(stem) = resource.strip_suffix('y') {
+        format!("{stem}ies")
+    } else {
+        format!("{resource}s")
+    }
 }
 
 fn push_route(
@@ -436,6 +763,7 @@ fn push_route(
     );
     let body_source = format!("source:{}:body", file.relative_path);
     let param_source = format!("source:{}:route_param", file.relative_path);
+    let query_source = format!("source:{}:query", file.relative_path);
     facts.sources.push(SourceFact {
         id: body_source.clone(),
         kind: SourceKind::Body,
@@ -452,6 +780,14 @@ fn push_route(
         controlled_by_request: true,
         span: span.clone(),
     });
+    facts.sources.push(SourceFact {
+        id: query_source.clone(),
+        kind: SourceKind::QueryParam,
+        name: "query".to_owned(),
+        expression: query_expression(framework),
+        controlled_by_request: true,
+        span: span.clone(),
+    });
     facts.routes.push(RouteFact {
         id,
         framework,
@@ -461,7 +797,7 @@ fn push_route(
         handler,
         span,
         middleware,
-        sources: vec![param_source, body_source],
+        sources: vec![param_source, body_source, query_source],
     });
 }
 
@@ -669,10 +1005,20 @@ fn body_expression(framework: Framework) -> String {
 fn param_expression(framework: Framework) -> String {
     match framework {
         Framework::FastApi | Framework::Django | Framework::DjangoRestFramework => {
-            "path parameter".to_owned()
+            "kwargs/path parameter".to_owned()
         }
         Framework::NextJs => "params".to_owned(),
         _ => "req.params".to_owned(),
+    }
+}
+
+fn query_expression(framework: Framework) -> String {
+    match framework {
+        Framework::FastApi => "query parameter".to_owned(),
+        Framework::DjangoRestFramework => "request.query_params".to_owned(),
+        Framework::Django => "request.GET".to_owned(),
+        Framework::NextJs => "request.nextUrl.searchParams".to_owned(),
+        _ => "req.query".to_owned(),
     }
 }
 
@@ -722,10 +1068,6 @@ fn normalize_nextjs_dynamic_segments(path: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
-}
-
-fn inferred_django_path(file: &SourceFile) -> String {
-    format!("/{}", file.relative_path.replace(".py", ""))
 }
 
 fn class_name_from_line(line: &str) -> Option<String> {
@@ -993,9 +1335,92 @@ mod tests {
         let facts = extract_django_rest_framework(&file, 0);
         assert_eq!(facts.routes[0].handler, "InvoiceViewSet");
         assert_eq!(facts.routes[0].span.start.line, 3);
+        assert_eq!(facts.routes[0].path, "/invoices/{pk}");
         assert_eq!(
             facts.routes[0].middleware,
             vec!["IsAuthenticated", "InvoicePermission"]
         );
+        assert!(facts.routes[0]
+            .sources
+            .contains(&"source:app/views.py:query".to_owned()));
+        let query = facts
+            .sources
+            .iter()
+            .find(|source| source.id.ends_with(":query"))
+            .expect("query source should exist");
+        assert_eq!(query.expression, "request.query_params");
+    }
+
+    #[test]
+    fn drf_extraction_discovers_apiview_http_methods() {
+        let file = SourceFile {
+            path: "app/views.py".into(),
+            relative_path: "app/views.py".to_owned(),
+            language: Language::Python,
+            text: "from rest_framework.views import APIView\n\nclass InvoiceAPIView(APIView):\n    permission_classes = [IsAuthenticated]\n\n    def patch(self, request, pk):\n        pass\n"
+                .to_owned(),
+        };
+
+        let facts = extract_django_rest_framework(&file, 0);
+        assert_eq!(facts.routes.len(), 1);
+        assert_eq!(facts.routes[0].method, "PATCH");
+        assert_eq!(facts.routes[0].path, "/invoices/{pk}");
+        assert_eq!(facts.routes[0].handler, "InvoiceAPIView.patch");
+        assert_eq!(facts.routes[0].span.start.line, 6);
+    }
+
+    #[test]
+    fn drf_extraction_discovers_viewset_actions_and_router_registrations() {
+        let file = SourceFile {
+            path: "app/views.py".into(),
+            relative_path: "app/views.py".to_owned(),
+            language: Language::Python,
+            text: "from rest_framework.decorators import action\nfrom rest_framework.routers import DefaultRouter\n\nclass InvoiceViewSet(ModelViewSet):\n    @action(detail=True, methods=[\"post\"])\n    def approve(self, request, pk=None):\n        pass\n\nrouter = DefaultRouter()\nrouter.register(\"billing/invoices\", InvoiceViewSet, basename=\"invoice\")\n"
+                .to_owned(),
+        };
+
+        let facts = extract_django_rest_framework(&file, 0);
+        assert!(facts.routes.iter().any(|route| {
+            route.method == "POST"
+                && route.path == "/invoices/{pk}"
+                && route.handler == "InvoiceViewSet.approve"
+        }));
+        assert!(facts.routes.iter().any(|route| {
+            route.method == "ANY"
+                && route.path == "/billing/invoices"
+                && route.handler == "InvoiceViewSet"
+        }));
+    }
+
+    #[test]
+    fn django_extraction_discovers_url_patterns() {
+        let file = SourceFile {
+            path: "app/urls.py".into(),
+            relative_path: "app/urls.py".to_owned(),
+            language: Language::Python,
+            text: String::new(),
+        };
+        let parsed = ParsedFile {
+            language: Language::Python,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![CallFact {
+                callee: "path".to_owned(),
+                arguments: vec![
+                    "\"invoices/<uuid:invoice_id>/\"".to_owned(),
+                    "InvoiceView.as_view()".to_owned(),
+                ],
+                span: SourceSpan::single_line("app/urls.py", 5),
+            }],
+            suppressions: Vec::new(),
+        };
+
+        let facts = extract_django(&file, &parsed, 0);
+        assert_eq!(facts.routes.len(), 1);
+        assert_eq!(facts.routes[0].framework, Framework::Django);
+        assert_eq!(facts.routes[0].method, "ANY");
+        assert_eq!(facts.routes[0].path, "/invoices/{invoice_id}");
+        assert_eq!(facts.routes[0].handler, "InvoiceView");
     }
 }

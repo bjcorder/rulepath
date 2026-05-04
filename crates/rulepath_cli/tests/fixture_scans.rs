@@ -85,9 +85,42 @@ fn fastapi_sqlalchemy_unsafe_emits_python_parity_findings() {
 #[test]
 fn django_drf_unsafe_emits_unscoped_access_finding() {
     let path = fixture_path("fixtures/django_drf/unsafe");
-    let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);
-    assert!(stdout.contains("INV001"));
-    assert!(stdout.contains("Unscoped Invoice access"));
+    let stdout = run_rulepath(&[
+        "scan",
+        path.to_str().expect("utf-8 fixture path"),
+        "--format",
+        "json",
+    ]);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("json output should parse");
+    let finding = json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .iter()
+        .find(|finding| finding["rule_id"] == "INV001")
+        .expect("INV001 should be emitted");
+
+    assert_eq!(
+        finding["route_id"].as_str(),
+        Some("route:DjangoRestFramework:GET:/invoices/{pk}:0")
+    );
+    let source_ids = finding["source_ids"]
+        .as_array()
+        .expect("source_ids should be an array")
+        .iter()
+        .map(|value| value.as_str().expect("source id should be a string"))
+        .collect::<Vec<_>>();
+    assert!(source_ids.contains(&"source:app/views.py:route_param"));
+    let observed = finding["observed_evidence"]
+        .as_array()
+        .expect("observed evidence should be an array")
+        .iter()
+        .map(|value| value.as_str().expect("evidence label should be a string"))
+        .collect::<Vec<_>>();
+    assert!(observed.contains(&"authentication:IsAuthenticated"));
+    assert_eq!(
+        finding["call_path"][0]["function"].as_str(),
+        Some("InvoiceViewSet.get_object")
+    );
 }
 
 #[test]
