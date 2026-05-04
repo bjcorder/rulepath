@@ -53,3 +53,5 @@ rulepath scan fixtures/express_prisma/unsafe
 It should discover an Express route, trace to a Prisma sink, detect request-controlled IDs and body data, and emit `INV001` plus `INV002`.
 
 The second milestone mirrors that behavior for FastAPI and SQLAlchemy.
+
+The Django/DRF fixture pair verifies Django ORM extraction. The unsafe fixture should emit unscoped resource access for a request-controlled object lookup, while the safe fixture should remain clean because tenant filtering or object permission evidence is recognized.

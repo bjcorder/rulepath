@@ -284,8 +284,12 @@ fn extract_django_rest_framework(file: &SourceFile, route_offset: usize) -> Fram
         return FrameworkFacts::default();
     }
     let mut facts = FrameworkFacts::default();
-    for (line_index, line) in file.text.lines().enumerate() {
-        if line.contains("ModelViewSet") || line.contains("APIView") {
+    let lines = file.text.lines().collect::<Vec<_>>();
+    for (line_index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("class ")
+            && (trimmed.contains("ModelViewSet") || trimmed.contains("APIView"))
+        {
             push_route(
                 file,
                 &mut facts,
@@ -293,7 +297,7 @@ fn extract_django_rest_framework(file: &SourceFile, route_offset: usize) -> Fram
                 "GET".to_owned(),
                 inferred_django_path(file),
                 class_name_from_line(line).unwrap_or_else(|| "drf_view".to_owned()),
-                django_permission_classes(line),
+                django_permission_classes(&lines, line_index),
                 SourceSpan::single_line(file.relative_path.as_str(), line_index + 1),
                 route_offset,
             );
@@ -468,12 +472,32 @@ fn route_param_name(framework: Framework, path: &str) -> Option<String> {
     }
 }
 
-fn django_permission_classes(line: &str) -> Vec<String> {
-    if line.contains("permission_classes") {
-        vec!["permission_classes".to_owned()]
-    } else {
-        Vec::new()
+fn django_permission_classes(lines: &[&str], class_line_index: usize) -> Vec<String> {
+    let mut classes = Vec::new();
+    for line in lines.iter().skip(class_line_index + 1) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("class ") {
+            break;
+        }
+        if !trimmed.starts_with("permission_classes") {
+            continue;
+        }
+        let Some(open) = trimmed.find('[') else {
+            continue;
+        };
+        let Some(close) = trimmed[open + 1..].find(']') else {
+            continue;
+        };
+        classes.extend(
+            trimmed[open + 1..open + 1 + close]
+                .split(',')
+                .filter_map(|item| {
+                    let name = item.trim();
+                    (!name.is_empty()).then(|| name.to_owned())
+                }),
+        );
     }
+    classes
 }
 
 fn express_method(callee: &str) -> Option<&'static str> {
@@ -742,5 +766,24 @@ mod tests {
             .find(|source| source.id.ends_with(":route_param"))
             .expect("route param source should exist");
         assert_eq!(route_param.name, "invoice_id");
+    }
+
+    #[test]
+    fn drf_extraction_uses_class_span_and_permission_classes() {
+        let file = SourceFile {
+            path: "app/views.py".into(),
+            relative_path: "app/views.py".to_owned(),
+            language: Language::Python,
+            text: "from rest_framework.viewsets import ModelViewSet\n\nclass InvoiceViewSet(ModelViewSet):\n    permission_classes = [IsAuthenticated, InvoicePermission]\n"
+                .to_owned(),
+        };
+
+        let facts = extract_django_rest_framework(&file, 0);
+        assert_eq!(facts.routes[0].handler, "InvoiceViewSet");
+        assert_eq!(facts.routes[0].span.start.line, 3);
+        assert_eq!(
+            facts.routes[0].middleware,
+            vec!["IsAuthenticated", "InvoicePermission"]
+        );
     }
 }

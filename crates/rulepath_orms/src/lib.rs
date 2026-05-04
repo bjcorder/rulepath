@@ -40,7 +40,7 @@ impl DataLayerAdapter for BuiltInDataLayerAdapter {
         match self.descriptor.id {
             DataLayer::Prisma => extract_prisma_operations(file, parsed, config),
             DataLayer::SqlAlchemy => extract_sqlalchemy_operations(file, parsed, config),
-            DataLayer::DjangoOrm => extract_django_orm_operations(file, config),
+            DataLayer::DjangoOrm => extract_django_orm_operations(file, parsed, config),
             DataLayer::Unknown => Vec::new(),
         }
     }
@@ -387,8 +387,61 @@ fn contains_body_assignment(window: &str) -> bool {
         .any(|line| line.contains(" = body.") || line.contains(" = request.data"))
 }
 
-fn extract_django_orm_operations(file: &SourceFile, config: &ResolvedConfig) -> Vec<OperationFact> {
+fn extract_django_orm_operations(
+    file: &SourceFile,
+    parsed: &ParsedFile,
+    config: &ResolvedConfig,
+) -> Vec<OperationFact> {
     let mut operations = Vec::new();
+    for call in &parsed.calls {
+        if let Some(shape) = django_call_shape(call.callee.as_str()) {
+            let window = surrounding_window_for_line(&file.text, call.span.start.line, 500);
+            operations.push(OperationFact {
+                id: format!(
+                    "sink:django_orm.{}.{}:{}:{}",
+                    shape.resource, shape.method, file.relative_path, call.span.start.line
+                ),
+                data_layer: DataLayer::DjangoOrm,
+                resource: shape.resource.clone(),
+                operation: shape.operation,
+                method: shape.method,
+                filters: extract_django_filters(
+                    &shape.resource,
+                    &call.arguments.join(", "),
+                    call.callee.as_str(),
+                    &window,
+                    config,
+                    file,
+                ),
+                mutation_fields: extract_django_mutation_fields(
+                    &call.arguments.join(", "),
+                    &window,
+                    file,
+                ),
+                bulk: matches!(
+                    shape.operation,
+                    OperationType::BulkUpdate | OperationType::BulkDelete
+                ),
+                span: call.span.clone(),
+            });
+        } else if let Some(shape) = django_save_shape(call.callee.as_str(), &file.text) {
+            let window = surrounding_window_for_line(&file.text, call.span.start.line, 500);
+            operations.push(OperationFact {
+                id: format!(
+                    "sink:django_orm.{}.{}:{}:{}",
+                    shape.resource, shape.method, file.relative_path, call.span.start.line
+                ),
+                data_layer: DataLayer::DjangoOrm,
+                resource: shape.resource.clone(),
+                operation: shape.operation,
+                method: shape.method,
+                filters: extract_filters(&shape.resource, &window, config, file),
+                mutation_fields: extract_django_mutation_fields("", &window, file),
+                bulk: false,
+                span: call.span.clone(),
+            });
+        }
+    }
     for (offset, _) in file.text.match_indices(".objects.") {
         let before = &file.text[..offset];
         let resource = before
@@ -408,6 +461,12 @@ fn extract_django_orm_operations(file: &SourceFile, config: &ResolvedConfig) -> 
             continue;
         };
         let line = rulepath_workspace::line_number_for_offset(&file.text, offset);
+        if operations
+            .iter()
+            .any(|operation| operation.span.start.line == line && operation.resource == resource)
+        {
+            continue;
+        }
         let window = surrounding_window_for_offset(&file.text, offset, 500);
         operations.push(OperationFact {
             id: format!(
@@ -427,7 +486,145 @@ fn extract_django_orm_operations(file: &SourceFile, config: &ResolvedConfig) -> 
             span: SourceSpan::single_line(file.relative_path.as_str(), line),
         });
     }
+    operations.sort_by(|left, right| {
+        left.span
+            .start
+            .line
+            .cmp(&right.span.start.line)
+            .then(left.id.cmp(&right.id))
+    });
+    operations.dedup_by(|left, right| left.id == right.id);
     operations
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DjangoOperationShape {
+    resource: String,
+    method: String,
+    operation: OperationType,
+}
+
+fn django_call_shape(callee: &str) -> Option<DjangoOperationShape> {
+    let objects_index = callee.find(".objects.")?;
+    let resource = callee[..objects_index]
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    if resource.is_empty() {
+        return None;
+    }
+    let after_objects = &callee[objects_index + ".objects.".len()..];
+    let method = django_method_from_chain(after_objects)?;
+    let operation = django_operation(method)?;
+    let method = format!("{resource}.objects.{method}");
+    Some(DjangoOperationShape {
+        resource,
+        method,
+        operation,
+    })
+}
+
+fn django_method_from_chain(chain: &str) -> Option<&'static str> {
+    for method in ["update", "delete"] {
+        if chain.starts_with(method) || chain.contains(&format!(".{method}")) {
+            return Some(method);
+        }
+    }
+    ["get", "filter", "all", "create"]
+        .into_iter()
+        .find(|&method| chain.starts_with(method))
+}
+
+fn django_save_shape(callee: &str, text: &str) -> Option<DjangoOperationShape> {
+    if !callee.ends_with(".save") && callee != "save" {
+        return None;
+    }
+    let resource = serializer_resource(text).or_else(|| infer_resource_from_text(text))?;
+    let operation = if text.contains("instance=") || text.contains(".objects.get") {
+        OperationType::Update
+    } else {
+        OperationType::Create
+    };
+    Some(DjangoOperationShape {
+        resource,
+        method: callee.to_owned(),
+        operation,
+    })
+}
+
+fn serializer_resource(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let Some(index) = line.find("Serializer") else {
+            continue;
+        };
+        let before = &line[..index];
+        let name = before
+            .rsplit(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .find(|part| !part.is_empty())?;
+        if !name.is_empty() {
+            return Some(name.to_owned());
+        }
+    }
+    None
+}
+
+fn extract_django_filters(
+    resource: &str,
+    arguments: &str,
+    callee: &str,
+    window: &str,
+    config: &ResolvedConfig,
+    file: &SourceFile,
+) -> Vec<FilterFact> {
+    let filter_text = format!("{arguments}\n{callee}\n{window}");
+    let mut filters = Vec::new();
+    if contains_id_filter(filter_text.as_str())
+        || filter_text.contains("kwargs")
+        || filter_text.contains("\"pk\"")
+        || filter_text.contains("'pk'")
+        || filter_text.contains("query_params")
+    {
+        filters.push(FilterFact {
+            field: "id".to_owned(),
+            value: request_controlled_value(filter_text.as_str()),
+            source_id: Some(format!("source:{}:route_param", file.relative_path)),
+        });
+    }
+    for field in config.tenant_fields_for(resource) {
+        if filter_text.contains(&field) {
+            filters.push(FilterFact {
+                field,
+                value: "current principal scope".to_owned(),
+                source_id: None,
+            });
+        }
+    }
+    filters.sort_by(|left, right| left.field.cmp(&right.field));
+    filters.dedup_by(|left, right| left.field == right.field && left.source_id == right.source_id);
+    filters
+}
+
+fn extract_django_mutation_fields(
+    arguments: &str,
+    window: &str,
+    file: &SourceFile,
+) -> Vec<MutationFieldFact> {
+    let text = format!("{arguments}\n{window}");
+    let mut fields = extract_mutation_fields(text.as_str(), file);
+    if text.contains("serializer")
+        && (text.contains("request.data") || text.contains("validated_data"))
+        && fields.is_empty()
+    {
+        fields.push(MutationFieldFact {
+            field: "*".to_owned(),
+            value: "serializer input".to_owned(),
+            source_id: Some(format!("source:{}:body", file.relative_path)),
+        });
+    }
+    fields.sort_by(|left, right| left.field.cmp(&right.field));
+    fields.dedup_by(|left, right| left.field == right.field && left.source_id == right.source_id);
+    fields
 }
 
 fn extract_filters(
@@ -829,5 +1026,124 @@ mod tests {
         assert!(operations[0].bulk);
         assert_eq!(operations[1].operation, OperationType::BulkDelete);
         assert!(operations[1].bulk);
+    }
+
+    #[test]
+    fn django_get_filter_and_tenant_scope_are_extracted() {
+        let file = SourceFile {
+            path: "app/views.py".into(),
+            relative_path: "app/views.py".to_owned(),
+            language: Language::Python,
+            text: "Invoice.objects.get(id=self.kwargs[\"pk\"])\nInvoice.objects.filter(tenant_id=self.request.user.tenant_id)\n".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::Python,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![
+                CallFact {
+                    callee: "Invoice.objects.get".to_owned(),
+                    arguments: vec!["id=self.kwargs[\"pk\"]".to_owned()],
+                    span: SourceSpan::single_line("app/views.py", 1),
+                },
+                CallFact {
+                    callee: "Invoice.objects.filter".to_owned(),
+                    arguments: vec!["tenant_id=self.request.user.tenant_id".to_owned()],
+                    span: SourceSpan::single_line("app/views.py", 2),
+                },
+            ],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_django_orm_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].operation, OperationType::Read);
+        assert!(operations[0]
+            .filters
+            .iter()
+            .any(|filter| filter.field == "id" && filter.source_id.is_some()));
+        assert!(operations[1]
+            .filters
+            .iter()
+            .any(|filter| filter.field == "tenant_id" && filter.source_id.is_none()));
+    }
+
+    #[test]
+    fn django_create_and_queryset_bulk_mutations_are_extracted() {
+        let file = SourceFile {
+            path: "app/views.py".into(),
+            relative_path: "app/views.py".to_owned(),
+            language: Language::Python,
+            text: "Invoice.objects.create(status=request.data[\"status\"])\nInvoice.objects.filter(client_id=self.kwargs[\"client_id\"]).update(status=request.data[\"status\"])\nInvoice.objects.filter(client_id=self.kwargs[\"client_id\"]).delete()\n".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::Python,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![
+                CallFact {
+                    callee: "Invoice.objects.create".to_owned(),
+                    arguments: vec!["status=request.data[\"status\"]".to_owned()],
+                    span: SourceSpan::single_line("app/views.py", 1),
+                },
+                CallFact {
+                    callee: "Invoice.objects.filter(client_id=self.kwargs[\"client_id\"]).update"
+                        .to_owned(),
+                    arguments: vec!["status=request.data[\"status\"]".to_owned()],
+                    span: SourceSpan::single_line("app/views.py", 2),
+                },
+                CallFact {
+                    callee: "Invoice.objects.filter(client_id=self.kwargs[\"client_id\"]).delete"
+                        .to_owned(),
+                    arguments: Vec::new(),
+                    span: SourceSpan::single_line("app/views.py", 3),
+                },
+            ],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_django_orm_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].operation, OperationType::Create);
+        assert!(operations[0]
+            .mutation_fields
+            .iter()
+            .any(|field| field.field == "status" && field.source_id.is_some()));
+        assert!(operations
+            .iter()
+            .any(|operation| operation.operation == OperationType::BulkUpdate && operation.bulk));
+        assert!(operations
+            .iter()
+            .any(|operation| operation.operation == OperationType::BulkDelete && operation.bulk));
+    }
+
+    #[test]
+    fn django_serializer_save_uses_request_body() {
+        let file = SourceFile {
+            path: "app/views.py".into(),
+            relative_path: "app/views.py".to_owned(),
+            language: Language::Python,
+            text: "serializer = InvoiceSerializer(data=request.data)\nserializer.is_valid()\nserializer.save()\n".to_owned(),
+        };
+        let parsed = ParsedFile {
+            language: Language::Python,
+            file_id: file.relative_path.clone(),
+            imports: Vec::new(),
+            symbols: Vec::new(),
+            calls: vec![CallFact {
+                callee: "serializer.save".to_owned(),
+                arguments: Vec::new(),
+                span: SourceSpan::single_line("app/views.py", 3),
+            }],
+            suppressions: Vec::new(),
+        };
+
+        let operations = extract_django_orm_operations(&file, &parsed, &empty_config());
+        assert_eq!(operations[0].resource, "Invoice");
+        assert_eq!(operations[0].operation, OperationType::Create);
+        assert!(operations[0]
+            .mutation_fields
+            .iter()
+            .any(|field| field.field == "*" && field.source_id.is_some()));
     }
 }
