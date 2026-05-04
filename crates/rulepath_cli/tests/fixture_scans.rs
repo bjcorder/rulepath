@@ -306,6 +306,113 @@ fn infer_writes_draft_file_without_policy_enforcement() {
 }
 
 #[test]
+fn infer_rejects_generated_file_outside_project() {
+    let dir = unique_temp_dir("infer-escape");
+    fs::create_dir_all(&dir).expect("temp dir should be created");
+    let escaped_name = format!("rulepath-infer-escape-{}.yml", std::process::id());
+    fs::write(
+        dir.join(".rulepath.yml"),
+        format!("version: 1\ninference:\n  generated_file: ../{escaped_name}\n"),
+    )
+    .expect("test config should be written");
+
+    let output = run_rulepath_in(&dir, &["infer", "."]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("inference.generated_file"));
+    assert!(!dir
+        .parent()
+        .expect("temp dir should have a parent")
+        .join(escaped_name)
+        .exists());
+}
+
+#[test]
+fn infer_rejects_absolute_generated_file() {
+    let dir = unique_temp_dir("infer-absolute");
+    fs::create_dir_all(&dir).expect("temp dir should be created");
+    let absolute = dir.join("outside.yml");
+    let absolute = absolute.to_string_lossy();
+    fs::write(
+        dir.join(".rulepath.yml"),
+        format!("version: 1\ninference:\n  generated_file: '{absolute}'\n"),
+    )
+    .expect("test config should be written");
+
+    let output = run_rulepath_in(&dir, &["infer", "."]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("inference.generated_file"));
+}
+
+#[test]
+fn baseline_rejects_file_outside_project() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("baseline-escape");
+    copy_dir_all(&source, &dir);
+    let escaped_name = format!("rulepath-baseline-escape-{}.json", std::process::id());
+    fs::write(
+        dir.join(".rulepath.yml"),
+        format!("version: 1\nci:\n  baseline_file: ../{escaped_name}\n"),
+    )
+    .expect("test config should be written");
+
+    let output = run_rulepath_in(&dir, &["baseline", "create", "."]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ci.baseline_file"));
+    assert!(!dir
+        .parent()
+        .expect("temp dir should have a parent")
+        .join(escaped_name)
+        .exists());
+}
+
+#[test]
+fn ci_rejects_baseline_file_outside_project() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("ci-baseline-escape");
+    copy_dir_all(&source, &dir);
+    fs::write(
+        dir.join(".rulepath.yml"),
+        "version: 1\nci:\n  fail: true\n  baseline_file: ../baseline.json\n",
+    )
+    .expect("test config should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", ".", "--ci"]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ci.baseline_file"));
+}
+
+#[test]
+fn nested_config_paths_inside_project_are_allowed() {
+    let dir = unique_temp_dir("nested-config-paths");
+    fs::create_dir_all(&dir).expect("temp dir should be created");
+    fs::write(
+        dir.join(".rulepath.yml"),
+        "version: 1\ninference:\n  generated_file: .rulepath/generated.yml\nci:\n  baseline_file: .rulepath/baseline.json\n",
+    )
+    .expect("test config should be written");
+
+    let infer = run_rulepath_in(&dir, &["infer", "."]);
+    assert!(
+        infer.status.success(),
+        "infer stderr: {}",
+        String::from_utf8_lossy(&infer.stderr)
+    );
+    assert!(dir.join(".rulepath/generated.yml").exists());
+
+    let baseline = run_rulepath_in(&dir, &["baseline", "create", "."]);
+    assert!(
+        baseline.status.success(),
+        "baseline stderr: {}",
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    assert!(dir.join(".rulepath/baseline.json").exists());
+}
+
+#[test]
 fn ci_failure_respects_baseline() {
     let source = fixture_path("fixtures/express_prisma/unsafe");
     let dir = unique_temp_dir("baseline");

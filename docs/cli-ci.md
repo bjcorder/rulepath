@@ -36,6 +36,8 @@ Exit behavior:
 - `include_review_hints: false`: review hints do not fail CI.
 - `new_findings_only: true`: baseline entries do not fail CI.
 
+`ci.baseline_file` must be a relative path inside the scan root. Absolute paths and paths containing `..` are rejected for both baseline creation and CI reads.
+
 Suppressions are applied before reporting, baseline creation, and CI failure decisions. When suppression reasons are required, a bare disabling comment is a scan error rather than a hidden finding.
 
 ## JSON Output
