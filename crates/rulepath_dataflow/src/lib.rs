@@ -105,11 +105,12 @@ fn attach_route_evidence(ir: &mut ProjectIr) {
         if evidence.route_id.is_some() {
             continue;
         }
-        if let Some(route) = ir
-            .routes
-            .iter()
-            .find(|route| route.span.file_id.as_str() == evidence.span.file_id.as_str())
-            .or_else(|| ir.routes.first())
+        if let Some(route) = nearest_same_file_route_for_line(
+            ir.routes.as_slice(),
+            evidence.span.file_id.as_str(),
+            evidence.span.start.line,
+        )
+        .or_else(|| ir.routes.first())
         {
             evidence.route_id = Some(route.id.clone());
         }
@@ -198,11 +199,7 @@ fn find_route_for_operation<'a>(
     operation_function: Option<&FunctionSpan>,
     config: &ResolvedConfig,
 ) -> Option<RouteMatch<'a>> {
-    if let Some(route) = ir
-        .routes
-        .iter()
-        .find(|route| route.span.file_id.as_str() == operation.span.file_id.as_str())
-    {
+    if let Some(route) = nearest_same_file_route(ir.routes.as_slice(), operation) {
         return Some(RouteMatch {
             route,
             confidence: Confidence::High,
@@ -230,6 +227,34 @@ fn find_route_for_operation<'a>(
         }
     }
     None
+}
+
+fn nearest_same_file_route<'a>(
+    routes: &'a [RouteFact],
+    operation: &OperationFact,
+) -> Option<&'a RouteFact> {
+    nearest_same_file_route_for_line(
+        routes,
+        operation.span.file_id.as_str(),
+        operation.span.start.line,
+    )
+}
+
+fn nearest_same_file_route_for_line<'a>(
+    routes: &'a [RouteFact],
+    file_id: &str,
+    line: usize,
+) -> Option<&'a RouteFact> {
+    routes
+        .iter()
+        .filter(|route| route.span.file_id.as_str() == file_id)
+        .filter(|route| route.span.start.line <= line)
+        .max_by_key(|route| route.span.start.line)
+        .or_else(|| {
+            routes
+                .iter()
+                .find(|route| route.span.file_id.as_str() == file_id)
+        })
 }
 
 fn fallback_frames(
@@ -955,6 +980,49 @@ mod tests {
             &config
         )
         .is_none());
+    }
+
+    #[test]
+    fn same_file_route_matching_uses_nearest_prior_route_span() {
+        let operation = OperationFact {
+            id: "sink:test".to_owned(),
+            data_layer: DataLayer::DjangoOrm,
+            resource: "Invoice".to_owned(),
+            operation: OperationType::Read,
+            method: "Invoice.objects.get".to_owned(),
+            filters: Vec::new(),
+            mutation_fields: Vec::new(),
+            bulk: false,
+            span: SourceSpan::single_line("app/views.py", 12),
+        };
+        let routes = vec![
+            RouteFact {
+                id: "route:first".to_owned(),
+                framework: rulepath_ir::Framework::DjangoRestFramework,
+                language: Language::Python,
+                method: "GET".to_owned(),
+                path: "/invoices".to_owned(),
+                handler: "InvoiceViewSet.list".to_owned(),
+                span: SourceSpan::single_line("app/views.py", 5),
+                middleware: Vec::new(),
+                sources: Vec::new(),
+            },
+            RouteFact {
+                id: "route:second".to_owned(),
+                framework: rulepath_ir::Framework::DjangoRestFramework,
+                language: Language::Python,
+                method: "GET".to_owned(),
+                path: "/invoices/{pk}".to_owned(),
+                handler: "InvoiceViewSet.get_object".to_owned(),
+                span: SourceSpan::single_line("app/views.py", 10),
+                middleware: Vec::new(),
+                sources: Vec::new(),
+            },
+        ];
+
+        let route = nearest_same_file_route(&routes, &operation)
+            .expect("same-file route should be matched");
+        assert_eq!(route.id, "route:second");
     }
 
     #[test]

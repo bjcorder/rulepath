@@ -33,6 +33,7 @@ impl From<EvidenceClassification> for Option<EvidenceKind> {
 #[must_use]
 pub fn classify_helper(helper: &str, config: &ResolvedConfig) -> EvidenceClassification {
     let helper = normalized_helper(helper);
+    let lower_helper = helper.to_ascii_lowercase();
     if configured_helpers(
         helper.as_str(),
         &config.raw.auth.authentication_guards.python,
@@ -54,18 +55,25 @@ pub fn classify_helper(helper: &str, config: &ResolvedConfig) -> EvidenceClassif
     ) {
         return EvidenceClassification::TenantScope;
     }
-    if helper.contains("object") && (helper.contains("permission") || helper.contains("authorize"))
+    if lower_helper.contains("object")
+        && (lower_helper.contains("permission") || lower_helper.contains("authorize"))
     {
         return EvidenceClassification::ObjectScope;
     }
+    if helper.ends_with("Permission")
+        || lower_helper.contains("permission_required")
+        || lower_helper.contains("has_perm")
+    {
+        return EvidenceClassification::Authorization;
+    }
     if helper == "commit"
         || helper.ends_with(".commit")
-        || helper.contains("transaction")
+        || lower_helper.contains("transaction")
         || helper == "atomic"
     {
         return EvidenceClassification::Transaction;
     }
-    if helper.contains("idempotency") || helper.contains("idempotent") {
+    if lower_helper.contains("idempotency") || lower_helper.contains("idempotent") {
         return EvidenceClassification::Idempotency;
     }
     if config.raw.invariants.iter().any(|invariant| {
@@ -284,6 +292,14 @@ mod tests {
         assert_eq!(
             classify_helper("req.user.tenantId", &config),
             EvidenceClassification::TenantScope
+        );
+        assert_eq!(
+            classify_helper("InvoicePermission", &config),
+            EvidenceClassification::Authorization
+        );
+        assert_eq!(
+            classify_helper("check_object_permissions", &config),
+            EvidenceClassification::ObjectScope
         );
     }
 
