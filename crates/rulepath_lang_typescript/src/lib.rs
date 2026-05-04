@@ -418,9 +418,10 @@ fn identifier_prefix(text: &str) -> Option<String> {
 fn line_offsets(text: &str) -> Vec<(usize, &str)> {
     let mut lines = Vec::new();
     let mut offset = 0;
-    for line in text.lines() {
+    for raw_line in text.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches('\n').trim_end_matches('\r');
         lines.push((offset, line));
-        offset += line.len() + 1;
+        offset += raw_line.len();
     }
     lines
 }
@@ -553,5 +554,23 @@ router.patch("/:id", routeHandler);
             .iter()
             .any(|call| call.callee == "updateInvoice"));
         assert!(!parsed.calls.is_empty());
+    }
+
+    #[test]
+    fn crlf_sources_keep_symbol_line_numbers() {
+        let parsed = parse("import { prisma } from '@/db'\r\n\r\nexport async function PATCH() {\r\n  await prisma.invoice.update({ where: { id: params.id }, data: body })\r\n}\r\n");
+
+        let patch = parsed
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "PATCH")
+            .expect("PATCH symbol should be parsed");
+        assert_eq!(patch.span.start.line, 3);
+        let update = parsed
+            .calls
+            .iter()
+            .find(|call| call.callee == "prisma.invoice.update")
+            .expect("Prisma call should be parsed");
+        assert_eq!(update.span.start.line, 4);
     }
 }

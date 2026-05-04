@@ -47,6 +47,8 @@ Uncertainty should reduce confidence or produce review hints.
 
 The current analyzer builds a conservative trace index from parser-backed symbols and calls. Framework and data-layer adapters consume those parsed facts through deterministic registries, then dataflow connects route request sources to operations when parsed calls cross from route handlers into service functions.
 
+Next.js extraction covers App Router handlers in `app/api/**/route.{ts,tsx,js,jsx}` and practical Pages Router API handlers in `pages/api/**`. Dynamic segments such as `[invoiceId]`, `[...slug]`, and `[[...slug]]` normalize to route parameter sources, while request body sources use the `request.json()` model for downstream Prisma findings.
+
 Prisma extraction is parser-call backed and recognizes configured client aliases, supported CRUD and bulk methods, nested `where` filters, and `data` mutation payloads while ignoring projection-only `select` and `include` arguments.
 
 SQLAlchemy extraction is parser-call backed for `session.get`, `select`, `update`, `delete`, and `session.execute(...)` wrappers. Object assignment followed by `session.commit()` is modeled as a mutation so request-body field flows are visible to rules.
