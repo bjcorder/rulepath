@@ -19,3 +19,4 @@ All notable changes to Rulepath will be documented here.
 - Replace one-hop service tracing with an import- and symbol-aware call graph that respects `analysis.service_layer_tracing` and `analysis.max_call_depth`.
 - Fix ORM source-window slicing so non-ASCII source context cannot panic scans.
 - Restrict config-controlled inference output and CI baseline paths to relative paths inside the scan root.
+- Restrict suppression parsing to recognized TypeScript/JavaScript and Python comments so string literals cannot suppress findings.

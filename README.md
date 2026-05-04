@@ -112,7 +112,7 @@ invariants:
     severity: high
 ```
 
-Unknown config keys fail validation. Inline suppressions require a reason by default:
+Unknown config keys fail validation. Inline suppressions require a reason by default and are recognized only in language comments, not string literals:
 
 Configured `inference.generated_file` and `ci.baseline_file` values must stay inside the scan root. Use relative paths such as `.rulepath.inferred.yml` or `.rulepath/baseline.json`; absolute paths and `..` segments are rejected.
 

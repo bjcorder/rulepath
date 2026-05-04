@@ -465,6 +465,50 @@ fn suppression_with_reason_removes_matching_finding() {
 }
 
 #[test]
+fn typescript_string_literal_suppression_marker_does_not_hide_finding() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("ts-string-suppression");
+    copy_dir_all(&source, &dir);
+    let service_path = dir.join("src/services/invoices.ts");
+    let service = fs::read_to_string(&service_path).expect("service fixture should be readable");
+    fs::write(
+        &service_path,
+        service.replace(
+            "return prisma.invoice.update",
+            "const marker = \"rulepath-disable-next-line INV001 -- ignored string literal suppression\";\n  return prisma.invoice.update",
+        ),
+    )
+    .expect("service fixture should be updated");
+
+    let output = run_rulepath_in(&dir, &["scan", "."]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert!(stdout.contains("INV001"));
+}
+
+#[test]
+fn python_string_literal_suppression_marker_does_not_hide_finding() {
+    let source = fixture_path("fixtures/fastapi_sqlalchemy/unsafe");
+    let dir = unique_temp_dir("py-string-suppression");
+    copy_dir_all(&source, &dir);
+    let service_path = dir.join("app/invoice_service.py");
+    let service = fs::read_to_string(&service_path).expect("service fixture should be readable");
+    fs::write(
+        &service_path,
+        service.replace(
+            "invoice = session.get(Invoice, invoice_id)",
+            "marker = \"rulepath-disable-next-line INV001 -- ignored string literal suppression\"\n    invoice = session.get(Invoice, invoice_id)",
+        ),
+    )
+    .expect("service fixture should be updated");
+
+    let output = run_rulepath_in(&dir, &["scan", "."]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert!(stdout.contains("INV001"));
+}
+
+#[test]
 fn bare_suppression_fails_policy_validation() {
     let source = fixture_path("fixtures/express_prisma/unsafe");
     let dir = unique_temp_dir("bad-suppression");
