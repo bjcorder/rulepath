@@ -83,6 +83,21 @@ fn fastapi_sqlalchemy_unsafe_emits_python_parity_findings() {
 }
 
 #[test]
+fn django_drf_unsafe_emits_unscoped_access_finding() {
+    let path = fixture_path("fixtures/django_drf/unsafe");
+    let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);
+    assert!(stdout.contains("INV001"));
+    assert!(stdout.contains("Unscoped Invoice access"));
+}
+
+#[test]
+fn django_drf_safe_is_clean() {
+    let path = fixture_path("fixtures/django_drf/safe");
+    let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);
+    assert!(stdout.contains("Findings: 0"));
+}
+
+#[test]
 fn traced_service_sink_uses_route_request_sources() {
     let path = fixture_path("fixtures/express_prisma/unsafe");
     let stdout = run_rulepath(&[
