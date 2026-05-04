@@ -58,6 +58,8 @@ rulepath-disable RULE_ID -- reason
 rulepath-enable RULE_ID
 ```
 
+Suppression markers are recognized only in language comments: `//` and `/* ... */` for TypeScript/JavaScript, and `#` for Python. Markers inside string literals are ignored.
+
 When `suppressions.require_reason` is true, disabling comments must include a reason after `--`.
 
 Suppressed diagnostics are removed before text, JSON, SARIF, baseline, and CI output. Bare or too-short suppression reasons fail the scan when the policy requires reasons.

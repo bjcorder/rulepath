@@ -26,7 +26,11 @@ impl LanguageAdapter for TypeScriptAdapter {
             imports: Vec::new(),
             symbols: Vec::new(),
             calls: Vec::new(),
-            suppressions: extract_suppressions_from_text(&file.relative_path, &file.text),
+            suppressions: extract_suppressions_from_text(
+                &file.relative_path,
+                &file.text,
+                file.language,
+            ),
         };
 
         let _parsed_without_panic = parse_with_oxc(file);

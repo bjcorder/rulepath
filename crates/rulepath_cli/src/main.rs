@@ -249,7 +249,8 @@ fn apply_suppressions(
 fn collect_suppressions(index: &WorkspaceIndex) -> BTreeMap<String, Vec<SuppressionFact>> {
     let mut suppressions = BTreeMap::new();
     for file in &index.files {
-        let file_suppressions = extract_suppressions_from_text(&file.relative_path, &file.text);
+        let file_suppressions =
+            extract_suppressions_from_text(&file.relative_path, &file.text, file.language);
         if !file_suppressions.is_empty() {
             suppressions.insert(file.relative_path.clone(), file_suppressions);
         }

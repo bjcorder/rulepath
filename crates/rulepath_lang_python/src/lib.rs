@@ -24,7 +24,11 @@ impl LanguageAdapter for PythonAdapter {
             imports: Vec::new(),
             symbols: Vec::new(),
             calls: Vec::new(),
-            suppressions: extract_suppressions_from_text(&file.relative_path, &file.text),
+            suppressions: extract_suppressions_from_text(
+                &file.relative_path,
+                &file.text,
+                file.language,
+            ),
         };
 
         let Some(tree) = parse_tree(file) else {
