@@ -18,3 +18,4 @@ All notable changes to Rulepath will be documented here.
 - Normalize configured authentication, authorization, scope, transaction, invariant, and idempotency evidence through `rulepath_auth`.
 - Replace one-hop service tracing with an import- and symbol-aware call graph that respects `analysis.service_layer_tracing` and `analysis.max_call_depth`.
 - Fix ORM source-window slicing so non-ASCII source context cannot panic scans.
+- Restrict config-controlled inference output and CI baseline paths to relative paths inside the scan root.

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::ErrorKind;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
@@ -134,7 +135,11 @@ fn infer(path: &Path, force: bool) -> Result<ExitCode> {
     let config = rulepath_config::load_project_config(path)?;
     let index = rulepath_workspace::scan_workspace(path, &config)?;
     let inferred = rulepath_infer::infer(&index);
-    let output_path = path.join(&config.raw.inference.generated_file);
+    let output_path = project_output_path(
+        path,
+        &config.raw.inference.generated_file,
+        "inference.generated_file",
+    )?;
     if output_path.exists() && !force {
         bail!(
             "{} already exists; use --force to overwrite",
@@ -179,7 +184,8 @@ fn scan_command(path: &Path, format: OutputFormat, ci: bool) -> Result<ExitCode>
 
 fn baseline_create(path: &Path, force: bool) -> Result<ExitCode> {
     let scan = run_scan(path)?;
-    let baseline_path = path.join(&scan.config.raw.ci.baseline_file);
+    let baseline_path =
+        project_output_path(path, &scan.config.raw.ci.baseline_file, "ci.baseline_file")?;
     if baseline_path.exists() && !force {
         bail!(
             "{} already exists; use --force to overwrite",
@@ -346,7 +352,7 @@ fn matches_ci_policy(diagnostic: &Diagnostic, config: &ResolvedConfig) -> bool {
 }
 
 fn load_baseline(path: &Path, file_name: &str) -> Result<BTreeSet<String>> {
-    let baseline_path = path.join(file_name);
+    let baseline_path = project_input_path(path, file_name, "ci.baseline_file")?;
     if !baseline_path.exists() {
         return Ok(BTreeSet::new());
     }
@@ -360,6 +366,63 @@ fn load_baseline(path: &Path, file_name: &str) -> Result<BTreeSet<String>> {
         .chain(baseline.review_hints)
         .map(|entry| entry.fingerprint)
         .collect())
+}
+
+fn project_output_path(root: &Path, configured: &str, config_key: &str) -> Result<PathBuf> {
+    let path = project_relative_path(root, configured, config_key)?;
+    let parent = path.parent().unwrap_or(root);
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create parent directory for {}", path.display()))?;
+    ensure_canonical_path_under_root(root, parent, config_key)?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => ensure_canonical_path_under_root(root, &path, config_key)?,
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect configured path {}", path.display()));
+        }
+    }
+    Ok(path)
+}
+
+fn project_input_path(root: &Path, configured: &str, config_key: &str) -> Result<PathBuf> {
+    let path = project_relative_path(root, configured, config_key)?;
+    if path.exists() {
+        ensure_canonical_path_under_root(root, &path, config_key)?;
+    }
+    Ok(path)
+}
+
+fn project_relative_path(root: &Path, configured: &str, config_key: &str) -> Result<PathBuf> {
+    if configured.trim().is_empty() {
+        bail!("{config_key} must not be empty");
+    }
+    let relative = Path::new(configured);
+    if relative.is_absolute() {
+        bail!("{config_key} must be a relative path inside the project root");
+    }
+    for component in relative.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!("{config_key} must stay within the project root")
+            }
+        }
+    }
+    Ok(root.join(relative))
+}
+
+fn ensure_canonical_path_under_root(root: &Path, path: &Path, config_key: &str) -> Result<()> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve project root {}", root.display()))?;
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("failed to resolve configured path {}", path.display()))?;
+    if !path.starts_with(&root) {
+        bail!("{config_key} must stay within the project root");
+    }
+    Ok(())
 }
 
 fn severity_key(severity: Severity) -> &'static str {

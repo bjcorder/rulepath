@@ -31,6 +31,10 @@ suppressions:
   min_reason_length: 20
 ```
 
+## Configured File Paths
+
+`inference.generated_file` and `ci.baseline_file` must be relative paths inside the scan root. Absolute paths and paths containing `..` fail with a clear config-key error. Nested paths such as `.rulepath/generated.yml` and `.rulepath/baseline.json` are valid; write commands create parent directories inside the project.
+
 ## Resources
 
 Resources define fields that imply tenancy, sensitivity, or server ownership.
