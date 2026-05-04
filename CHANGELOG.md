@@ -17,3 +17,4 @@ All notable changes to Rulepath will be documented here.
 - Add Next.js App Router and Pages Router API route extraction with dynamic parameter normalization, request body sources, Prisma sink propagation, and Auth.js evidence labels.
 - Normalize configured authentication, authorization, scope, transaction, invariant, and idempotency evidence through `rulepath_auth`.
 - Replace one-hop service tracing with an import- and symbol-aware call graph that respects `analysis.service_layer_tracing` and `analysis.max_call_depth`.
+- Fix ORM source-window slicing so non-ASCII source context cannot panic scans.
