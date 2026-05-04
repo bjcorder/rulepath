@@ -500,6 +500,8 @@ fn diagnostic(
         .collect::<Vec<_>>();
     source_ids.sort();
     source_ids.dedup();
+    let span_line = operation.span.start.line.to_string();
+    let span_column = operation.span.start.column.to_string();
 
     Diagnostic {
         kind,
@@ -524,10 +526,13 @@ fn diagnostic(
         fingerprint: fingerprint(&[
             rule_id,
             route_id.unwrap_or("no-route"),
+            &operation.id,
             &operation.resource,
             &format!("{:?}", operation.operation),
             &operation.method,
             &operation.span.file_id,
+            &span_line,
+            &span_column,
         ]),
     }
 }
@@ -601,9 +606,115 @@ fn observed_labels(evidence: &[&EvidenceFact]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    use rulepath_config::{ResourceConfig, RulepathConfig};
+    use rulepath_ir::{
+        CallFrame, DataLayer, FilterFact, Framework, Language, Position, RouteFact, SourceSpan,
+    };
+
     #[test]
     fn explanations_cover_core_rule() {
         let explanation = explain("INV001").expect("INV001 explanation should exist");
         assert_eq!(explanation.title, "Unscoped resource access");
+    }
+
+    #[test]
+    fn same_shaped_findings_at_different_sinks_have_distinct_fingerprints() {
+        let config = config_with_invoice_resource();
+        let ir = ProjectIr {
+            routes: vec![RouteFact {
+                id: "route:express:patch:/invoices/:id".to_owned(),
+                framework: Framework::Express,
+                language: Language::TypeScript,
+                method: "PATCH".to_owned(),
+                path: "/invoices/:id".to_owned(),
+                handler: "updateInvoice".to_owned(),
+                span: span(1, 1),
+                middleware: Vec::new(),
+                sources: vec!["source:route-param".to_owned()],
+            }],
+            operations: vec![
+                operation("sink:prisma.invoice.update:src/invoices.ts:10", 10),
+                operation("sink:prisma.invoice.update:src/invoices.ts:20", 20),
+            ],
+            call_paths: vec![
+                call_path(
+                    "callpath:route:express:patch:/invoices/:id:sink:10",
+                    "sink:prisma.invoice.update:src/invoices.ts:10",
+                ),
+                call_path(
+                    "callpath:route:express:patch:/invoices/:id:sink:20",
+                    "sink:prisma.invoice.update:src/invoices.ts:20",
+                ),
+            ],
+            ..ProjectIr::default()
+        };
+
+        let diagnostics = evaluate(&ir, &config);
+        let inv001 = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.rule_id == "INV001")
+            .collect::<Vec<_>>();
+        let repeated = evaluate(&ir, &config);
+        let repeated_inv001 = repeated
+            .iter()
+            .filter(|diagnostic| diagnostic.rule_id == "INV001")
+            .collect::<Vec<_>>();
+
+        assert_eq!(inv001.len(), 2);
+        assert_ne!(inv001[0].fingerprint, inv001[1].fingerprint);
+        assert_eq!(inv001, repeated_inv001);
+    }
+
+    fn config_with_invoice_resource() -> ResolvedConfig {
+        let mut raw = RulepathConfig::default();
+        raw.resources.insert(
+            "Invoice".to_owned(),
+            ResourceConfig {
+                tenant_fields: vec!["tenant_id".to_owned()],
+                sensitive_fields: Vec::new(),
+                server_owned_fields: Vec::new(),
+            },
+        );
+        ResolvedConfig::new(raw)
+    }
+
+    fn operation(id: &str, line: usize) -> OperationFact {
+        OperationFact {
+            id: id.to_owned(),
+            data_layer: DataLayer::Prisma,
+            resource: "Invoice".to_owned(),
+            operation: OperationType::Update,
+            method: "update".to_owned(),
+            filters: vec![FilterFact {
+                field: "id".to_owned(),
+                value: "invoiceId".to_owned(),
+                source_id: Some("source:route-param".to_owned()),
+            }],
+            mutation_fields: Vec::new(),
+            bulk: false,
+            span: span(line, 3),
+        }
+    }
+
+    fn call_path(id: &str, sink_id: &str) -> CallPath {
+        CallPath {
+            id: id.to_owned(),
+            route_id: "route:express:patch:/invoices/:id".to_owned(),
+            sink_id: sink_id.to_owned(),
+            frames: vec![CallFrame {
+                function: "updateInvoice".to_owned(),
+                file: "src/invoices.ts".to_owned(),
+                line: 1,
+            }],
+            confidence: Confidence::High,
+        }
+    }
+
+    fn span(line: usize, column: usize) -> SourceSpan {
+        SourceSpan {
+            file_id: "src/invoices.ts".to_owned(),
+            start: Position::new(line, column),
+            end: Position::new(line, column + 1),
+        }
     }
 }

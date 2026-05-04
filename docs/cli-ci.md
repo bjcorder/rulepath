@@ -38,6 +38,8 @@ Exit behavior:
 
 `ci.baseline_file` must be a relative path inside the scan root. Absolute paths and paths containing `..` are rejected for both baseline creation and CI reads.
 
+Baseline fingerprints include the rule, route, sink identity, resource, operation, method, file, and primary span start. Regenerate baselines after upgrades that change fingerprint inputs.
+
 Suppressions are applied before reporting, baseline creation, and CI failure decisions. When suppression reasons are required, a bare disabling comment is a scan error rather than a hidden finding.
 
 ## JSON Output

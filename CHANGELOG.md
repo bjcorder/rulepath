@@ -20,3 +20,4 @@ All notable changes to Rulepath will be documented here.
 - Fix ORM source-window slicing so non-ASCII source context cannot panic scans.
 - Restrict config-controlled inference output and CI baseline paths to relative paths inside the scan root.
 - Restrict suppression parsing to recognized TypeScript/JavaScript and Python comments so string literals cannot suppress findings.
+- Include sink identity and primary span location in diagnostic fingerprints; regenerate baselines after upgrading.
