@@ -26,8 +26,15 @@ fn run_rulepath_in(cwd: &Path, args: &[&str]) -> Output {
 }
 
 fn command_output(cwd: Option<&Path>, args: &[&str]) -> Output {
+    command_output_with_env(cwd, args, &[])
+}
+
+fn command_output_with_env(cwd: Option<&Path>, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_rulepath"));
     command.args(args);
+    for (name, value) in env {
+        command.env(name, value);
+    }
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -274,6 +281,12 @@ fn json_output_includes_observed_evidence_labels() {
         .expect("review hints should be an array")
         .iter()
         .all(|hint| hint["confidence"] == "medium"));
+    assert!(!finding["call_path"]
+        .as_array()
+        .expect("call path should be an array")
+        .is_empty());
+    assert!(json["findings"].is_array());
+    assert!(json["review_hints"].is_array());
 }
 
 #[test]
@@ -281,10 +294,85 @@ fn text_output_shows_call_path_frames() {
     let path = fixture_path("fixtures/express_prisma/unsafe");
     let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);
     let normalized = stdout.replace('\\', "/");
+    assert!(stdout.contains("[HIGH] INV001"));
+    assert!(stdout.contains("Route:"));
     assert!(stdout.contains("Code path:"));
+    assert!(stdout.contains("Source:"));
+    assert!(stdout.contains("Sink:"));
+    assert!(stdout.contains("Missing invariant:"));
+    assert!(stdout.contains("Observed evidence:"));
+    assert!(stdout.contains("Expected evidence:"));
+    assert!(stdout.contains("Suggested fix:"));
     assert!(normalized.contains("src/routes/invoices.ts:10 inline_handler()"));
     assert!(normalized.contains("src/services/invoices.ts:"));
     assert!(normalized.contains("updateInvoice()"));
+}
+
+#[test]
+fn sarif_output_includes_rule_metadata_locations_fingerprints_and_codeflows() {
+    let path = fixture_path("fixtures/express_prisma/unsafe");
+    let stdout = run_rulepath(&[
+        "scan",
+        path.to_str().expect("utf-8 fixture path"),
+        "--format",
+        "sarif",
+    ]);
+    let sarif: serde_json::Value = serde_json::from_str(&stdout).expect("sarif should parse");
+    assert_eq!(sarif["version"].as_str(), Some("2.1.0"));
+    let run = &sarif["runs"][0];
+    let rules = run["tool"]["driver"]["rules"]
+        .as_array()
+        .expect("rules should be an array");
+    assert!(rules
+        .iter()
+        .any(|rule| rule["id"] == "INV001" && rule["properties"]["kind"] == "finding"));
+    let result = run["results"]
+        .as_array()
+        .expect("results should be an array")
+        .iter()
+        .find(|result| result["ruleId"] == "INV001")
+        .expect("INV001 result should be present");
+
+    assert_eq!(result["level"].as_str(), Some("error"));
+    assert!(
+        result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            .as_str()
+            .expect("location uri should be present")
+            .contains("src/services/invoices.ts")
+    );
+    assert!(result["partialFingerprints"]["rulepathFingerprint"].is_string());
+    assert_eq!(result["properties"]["kind"].as_str(), Some("finding"));
+    assert!(result["properties"]["sinkId"].is_string());
+    assert!(!result["codeFlows"][0]["threadFlows"][0]["locations"]
+        .as_array()
+        .expect("code flow locations should be an array")
+        .is_empty());
+}
+
+#[test]
+fn github_actions_annotations_emit_findings_only_to_stderr() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("gha-annotations");
+    copy_dir_all(&source, &dir);
+    fs::write(
+        dir.join(".rulepath.yml"),
+        "version: 1\nci:\n  fail: false\n",
+    )
+    .expect("test config should be written");
+
+    let output = command_output_with_env(
+        Some(&dir),
+        &["scan", ".", "--ci", "--format", "json"],
+        &[("GITHUB_ACTIONS", "true")],
+    );
+
+    assert!(output.status.success());
+    serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .expect("json stdout should remain parseable");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(stderr.contains("::error file=src/services/invoices.ts,line="));
+    assert!(stderr.contains("INV001"));
+    assert!(!stderr.contains("HINT"));
 }
 
 #[test]
@@ -473,6 +561,59 @@ fn ci_failure_respects_baseline() {
         "ci stderr: {}",
         String::from_utf8_lossy(&second_ci.stderr)
     );
+}
+
+#[test]
+fn ci_fail_false_remains_advisory_with_findings() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("ci-advisory");
+    copy_dir_all(&source, &dir);
+    fs::write(
+        dir.join(".rulepath.yml"),
+        "version: 1\nci:\n  fail: false\n",
+    )
+    .expect("test config should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", ".", "--ci"]);
+
+    assert!(
+        output.status.success(),
+        "ci.fail false should stay advisory"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("INV001"));
+}
+
+#[test]
+fn ci_review_hints_do_not_fail_when_excluded() {
+    let dir = unique_temp_dir("ci-review-hints");
+    fs::create_dir_all(dir.join("src")).expect("fixture dirs should be created");
+    fs::write(
+        dir.join(".rulepath.yml"),
+        "version: 1\nci:\n  fail: true\n  fail_on:\n    include_review_hints: false\n",
+    )
+    .expect("test config should be written");
+    fs::write(
+        dir.join("src/export.ts"),
+        "import express from 'express';\nconst router = express.Router();\nrouter.get('/export', (req, res) => {\n  return res.type('text/csv').send('id,total');\n});\n",
+    )
+    .expect("test route should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", ".", "--ci", "--format", "json"]);
+
+    assert!(
+        output.status.success(),
+        "review hints should not fail CI by default"
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("json output should parse");
+    assert!(json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .is_empty());
+    assert!(!json["review_hints"]
+        .as_array()
+        .expect("review hints should be an array")
+        .is_empty());
 }
 
 #[test]

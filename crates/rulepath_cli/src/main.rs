@@ -9,7 +9,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use rulepath_config::{starter_config, validate_config, ResolvedConfig};
 use rulepath_ir::{Confidence, Diagnostic, DiagnosticKind, Severity};
 use rulepath_parsers::{extract_suppressions_from_text, SuppressionFact, SuppressionScope};
-use rulepath_reporters::{build_report, render_json, render_text, Report};
+use rulepath_reporters::{
+    build_report, render_github_annotations, render_json, render_text, Report,
+};
 use rulepath_workspace::WorkspaceIndex;
 use serde::{Deserialize, Serialize};
 
@@ -174,12 +176,19 @@ fn scan_command(path: &Path, format: OutputFormat, ci: bool) -> Result<ExitCode>
             println!("{}", serde_json::to_string_pretty(&sarif)?);
         }
     }
+    if ci && github_actions_enabled() {
+        eprint!("{}", render_github_annotations(&scan.report));
+    }
 
     if ci && should_fail_ci(path, &scan.config, &scan.report)? {
         Ok(ExitCode::from(1))
     } else {
         Ok(ExitCode::SUCCESS)
     }
+}
+
+fn github_actions_enabled() -> bool {
+    std::env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true")
 }
 
 fn baseline_create(path: &Path, force: bool) -> Result<ExitCode> {

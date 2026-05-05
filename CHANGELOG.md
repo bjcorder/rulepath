@@ -22,3 +22,4 @@ All notable changes to Rulepath will be documented here.
 - Restrict suppression parsing to recognized TypeScript/JavaScript and Python comments so string literals cannot suppress findings.
 - Include sink identity and primary span location in diagnostic fingerprints; regenerate baselines after upgrading.
 - Complete v1 rule and review-hint coverage for `INV001` through `INV008` and `HINT001` through `HINT006`.
+- Add GitHub Actions finding annotations and harden text, JSON, SARIF, and CI output contract coverage.

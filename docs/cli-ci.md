@@ -42,6 +42,10 @@ Baseline fingerprints include the rule, route, sink identity, resource, operatio
 
 Suppressions are applied before reporting, baseline creation, and CI failure decisions. When suppression reasons are required, a bare disabling comment is a scan error rather than a hidden finding.
 
+## GitHub Actions Annotations
+
+When `rulepath scan --ci` runs with `GITHUB_ACTIONS=true`, Rulepath emits GitHub Actions `::error` annotations for findings only. Annotations use the finding primary span for file, line, and column, and are written to stderr so JSON and SARIF stdout remain parseable. Review hints are not annotated unless a future policy explicitly opts them in.
+
 ## JSON Output
 
 JSON output keeps findings and review hints in separate arrays:
@@ -58,3 +62,9 @@ JSON output keeps findings and review hints in separate arrays:
   "review_hints": []
 }
 ```
+
+Findings and review hints include call-path frames when tracing can connect a route to a sink.
+
+## SARIF Output
+
+SARIF output includes stable rule metadata, result locations, `partialFingerprints.rulepathFingerprint`, diagnostic properties, and `codeFlows` when call-path frames are available. Finding results use SARIF `error` level; review hints remain marked as `review_hint` in result properties.

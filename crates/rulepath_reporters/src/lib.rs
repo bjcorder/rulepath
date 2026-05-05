@@ -38,6 +38,26 @@ pub fn render_json(report: &Report) -> serde_json::Result<String> {
 }
 
 #[must_use]
+pub fn render_github_annotations(report: &Report) -> String {
+    let mut output = String::new();
+    for finding in &report.findings {
+        let Some(span) = finding.primary_span.as_ref() else {
+            continue;
+        };
+        let title = format!("{} {}", finding.rule_id, finding.title);
+        output.push_str(&format!(
+            "::error file={},line={},col={},title={}::{}\n",
+            escape_annotation_property(&span.file_id),
+            span.start.line,
+            span.start.column,
+            escape_annotation_property(&title),
+            escape_annotation_message(&annotation_message(finding))
+        ));
+    }
+    output
+}
+
+#[must_use]
 pub fn render_text(report: &Report) -> String {
     let mut output = String::new();
     output.push_str("Rulepath scan results\n\n");
@@ -70,6 +90,33 @@ pub fn render_text(report: &Report) -> String {
         }
     }
     output
+}
+
+fn annotation_message(diagnostic: &Diagnostic) -> String {
+    let mut message = diagnostic.title.clone();
+    if let Some(route_id) = &diagnostic.route_id {
+        message.push_str(&format!(" Route: {route_id}."));
+    }
+    if let Some(missing) = &diagnostic.missing_invariant {
+        message.push_str(&format!(" Missing invariant: {missing}."));
+    }
+    if let Some(fix) = &diagnostic.suggested_fix {
+        message.push_str(&format!(" Suggested fix: {fix}"));
+    }
+    message
+}
+
+fn escape_annotation_property(value: &str) -> String {
+    escape_annotation_message(value)
+        .replace(':', "%3A")
+        .replace(',', "%2C")
+}
+
+fn escape_annotation_message(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
 }
 
 fn render_diagnostic_detail(diagnostic: &Diagnostic) -> String {
@@ -156,5 +203,52 @@ mod tests {
         let report = build_report("0.1.0", Vec::new());
         assert_eq!(report.summary.findings, 0);
         assert_eq!(report.summary.review_hints, 0);
+    }
+
+    #[test]
+    fn github_annotations_include_findings_only() {
+        let report = Report {
+            tool: "rulepath".to_owned(),
+            version: "0.1.0".to_owned(),
+            summary: ReportSummary {
+                findings: 1,
+                review_hints: 1,
+            },
+            findings: vec![diagnostic(DiagnosticKind::Finding, "INV001")],
+            review_hints: vec![diagnostic(DiagnosticKind::ReviewHint, "HINT001")],
+        };
+
+        let annotations = render_github_annotations(&report);
+
+        assert!(annotations.contains("::error file=src/invoices.ts,line=10,col=3"));
+        assert!(annotations.contains("INV001"));
+        assert!(!annotations.contains("HINT001"));
+    }
+
+    fn diagnostic(kind: DiagnosticKind, rule_id: &str) -> Diagnostic {
+        Diagnostic {
+            kind,
+            rule_id: rule_id.to_owned(),
+            title: "Unscoped Invoice access".to_owned(),
+            severity: Severity::High,
+            confidence: Confidence::High,
+            resource: Some("Invoice".to_owned()),
+            operation: None,
+            route_id: Some("route:Express:PATCH:/invoices/:id:0".to_owned()),
+            call_path_id: None,
+            call_path: Vec::new(),
+            source_ids: Vec::new(),
+            sink_id: Some("sink:1".to_owned()),
+            primary_span: Some(rulepath_ir::SourceSpan {
+                file_id: "src/invoices.ts".to_owned(),
+                start: rulepath_ir::Position::new(10, 3),
+                end: rulepath_ir::Position::new(10, 12),
+            }),
+            missing_invariant: Some("scope required".to_owned()),
+            observed_evidence: Vec::new(),
+            expected_evidence: Vec::new(),
+            suggested_fix: Some("Add tenant scope.".to_owned()),
+            fingerprint: "fingerprint".to_owned(),
+        }
     }
 }
