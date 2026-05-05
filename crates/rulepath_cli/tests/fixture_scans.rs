@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -77,6 +78,40 @@ fn first_finding_fingerprint(json: &serde_json::Value, rule_id: &str) -> String 
         .and_then(serde_json::Value::as_str)
         .expect("fingerprint should be a string")
         .to_owned()
+}
+
+fn scan_json(path: &str) -> serde_json::Value {
+    let path = fixture_path(path);
+    let stdout = run_rulepath(&[
+        "scan",
+        path.to_str().expect("utf-8 fixture path"),
+        "--format",
+        "json",
+    ]);
+    serde_json::from_str(&stdout).expect("json output should parse")
+}
+
+fn diagnostic_rule_ids(json: &serde_json::Value, section: &str) -> BTreeSet<String> {
+    json[section]
+        .as_array()
+        .unwrap_or_else(|| panic!("{section} should be an array"))
+        .iter()
+        .map(|diagnostic| {
+            diagnostic["rule_id"]
+                .as_str()
+                .expect("rule_id should be a string")
+                .to_owned()
+        })
+        .collect()
+}
+
+fn assert_contains_all_rules(observed: &BTreeSet<String>, expected: &[&str]) {
+    for rule_id in expected {
+        assert!(
+            observed.contains(*rule_id),
+            "{rule_id} should be present in {observed:?}"
+        );
+    }
 }
 
 #[test]
@@ -197,6 +232,93 @@ fn nextjs_prisma_authjs_safe_is_clean() {
     let path = fixture_path("fixtures/nextjs_prisma_authjs/safe");
     let stdout = run_rulepath(&["scan", path.to_str().expect("utf-8 fixture path")]);
     assert!(stdout.contains("Findings: 0"));
+}
+
+#[test]
+fn supported_framework_data_layer_fixtures_have_safe_and_unsafe_coverage() {
+    for (family, framework, sink) in [
+        ("express_prisma", "Express", "prisma"),
+        ("fastapi_sqlalchemy", "FastApi", "sqlalchemy"),
+        ("django_drf", "DjangoRestFramework", "django_orm"),
+        ("nextjs_prisma_authjs", "NextJs", "prisma"),
+    ] {
+        let unsafe_json = scan_json(&format!("fixtures/{family}/unsafe"));
+        let unsafe_findings = unsafe_json["findings"]
+            .as_array()
+            .expect("unsafe findings should be an array");
+        assert!(
+            !unsafe_findings.is_empty(),
+            "{family} unsafe fixture should emit findings"
+        );
+        assert!(
+            unsafe_findings.iter().any(|finding| finding["route_id"]
+                .as_str()
+                .is_some_and(|route_id| route_id.contains(framework))),
+            "{family} should exercise {framework} route discovery"
+        );
+        assert!(
+            unsafe_findings.iter().any(|finding| finding["sink_id"]
+                .as_str()
+                .is_some_and(|sink_id| sink_id.contains(sink))),
+            "{family} should exercise {sink} sink extraction"
+        );
+
+        let safe_json = scan_json(&format!("fixtures/{family}/safe"));
+        assert!(
+            safe_json["findings"]
+                .as_array()
+                .expect("safe findings should be an array")
+                .is_empty(),
+            "{family} safe fixture should not emit findings"
+        );
+    }
+}
+
+#[test]
+fn v1_rule_matrix_covers_every_finding_and_review_hint() {
+    let express_json = scan_json("fixtures/express_prisma/unsafe");
+    let matrix_json = scan_json("fixtures/v1_rule_matrix/unsafe");
+    let mut finding_ids = diagnostic_rule_ids(&express_json, "findings");
+    finding_ids.extend(diagnostic_rule_ids(&matrix_json, "findings"));
+    assert_contains_all_rules(
+        &finding_ids,
+        &[
+            "INV001", "INV002", "INV003", "INV004", "INV005", "INV006", "INV007", "INV008",
+        ],
+    );
+
+    let hint_ids = diagnostic_rule_ids(&matrix_json, "review_hints");
+    assert_contains_all_rules(
+        &hint_ids,
+        &[
+            "HINT001", "HINT002", "HINT003", "HINT004", "HINT005", "HINT006",
+        ],
+    );
+
+    for section in ["findings", "review_hints"] {
+        for diagnostic in matrix_json[section]
+            .as_array()
+            .expect("diagnostics should be arrays")
+        {
+            assert!(diagnostic["fingerprint"].is_string());
+            assert!(diagnostic["route_id"].is_string());
+            assert!(diagnostic["sink_id"].is_string());
+            assert!(diagnostic["primary_span"]["file_id"].is_string());
+        }
+    }
+}
+
+#[test]
+fn v1_rule_matrix_safe_fixture_is_clean() {
+    let json = scan_json("fixtures/v1_rule_matrix/safe");
+    assert!(json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .is_empty());
+    assert!(json["review_hints"]
+        .as_array()
+        .expect("review hints should be an array")
+        .is_empty());
 }
 
 #[test]

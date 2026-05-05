@@ -24,3 +24,4 @@ All notable changes to Rulepath will be documented here.
 - Complete v1 rule and review-hint coverage for `INV001` through `INV008` and `HINT001` through `HINT006`.
 - Add GitHub Actions finding annotations and harden text, JSON, SARIF, and CI output contract coverage.
 - Stabilize diagnostic fingerprints around semantic route and sink identity, and validate deterministic baseline files.
+- Expand the fixture matrix with v1 rule and review-hint coverage plus safe/unsafe structured assertions.

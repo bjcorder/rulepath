@@ -1,0 +1,27 @@
+version: 1
+
+resources:
+  Payment:
+    tenant_fields: [tenantId]
+    sensitive_fields: [amount]
+    server_owned_fields: [amount]
+
+invariants:
+  - id: invoice_state_transition
+    type: state_transition
+    resources: [Invoice]
+    operations: [update]
+    requires: [checkTransition]
+    severity: high
+  - id: payment_idempotency
+    type: idempotency
+    resources: [Payment]
+    operations: [update]
+    requires: [idempotency]
+    severity: high
+  - id: invoice_export_permission
+    type: operation_authorization
+    resources: [Invoice]
+    operations: [update, bulk_update, export, report]
+    requires: [authorization]
+    severity: high
