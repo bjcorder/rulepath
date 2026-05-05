@@ -25,3 +25,4 @@ All notable changes to Rulepath will be documented here.
 - Add GitHub Actions finding annotations and harden text, JSON, SARIF, and CI output contract coverage.
 - Stabilize diagnostic fingerprints around semantic route and sink identity, and validate deterministic baseline files.
 - Expand the fixture matrix with v1 rule and review-hint coverage plus safe/unsafe structured assertions.
+- Improve `.rulepath.inferred.yml` generation using IR facts, deterministic strict-config-compatible YAML, and fixture-backed inference tests.

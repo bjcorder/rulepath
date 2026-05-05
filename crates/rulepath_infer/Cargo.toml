@@ -9,7 +9,12 @@ description = "Draft config inference for Rulepath."
 
 [dependencies]
 rulepath_config = { path = "../rulepath_config" }
+rulepath_dataflow = { path = "../rulepath_dataflow" }
+rulepath_ir = { path = "../rulepath_ir" }
 rulepath_workspace = { path = "../rulepath_workspace" }
+
+[dev-dependencies]
+serde_yaml = { workspace = true }
 
 [lints]
 workspace = true

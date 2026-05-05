@@ -18,6 +18,8 @@ rulepath explain INV001
 
 ## CI Policy
 
+`rulepath infer .` writes a deterministic `.rulepath.inferred.yml` draft using parsed route, sink, resource, and evidence facts. The draft remains advisory: scans do not consume it unless reviewed content is copied into `.rulepath.yml`.
+
 ```yaml
 ci:
   fail: true

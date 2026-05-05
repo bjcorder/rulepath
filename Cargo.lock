@@ -930,7 +930,10 @@ name = "rulepath_infer"
 version = "0.1.0"
 dependencies = [
  "rulepath_config",
+ "rulepath_dataflow",
+ "rulepath_ir",
  "rulepath_workspace",
+ "serde_yaml",
 ]
 
 [[package]]

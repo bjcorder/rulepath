@@ -136,7 +136,7 @@ fn init(profile: &str, force: bool) -> Result<ExitCode> {
 fn infer(path: &Path, force: bool) -> Result<ExitCode> {
     let config = rulepath_config::load_project_config(path)?;
     let index = rulepath_workspace::scan_workspace(path, &config)?;
-    let inferred = rulepath_infer::infer(&index);
+    let inferred = rulepath_infer::infer(&index, &config);
     let output_path = project_output_path(
         path,
         &config.raw.inference.generated_file,
