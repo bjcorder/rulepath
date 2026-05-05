@@ -1,4 +1,7 @@
-use rulepath_ir::{Confidence, Diagnostic, DiagnosticKind, Severity};
+use rulepath_ir::{
+    AnalysisDiagnostic, AnalysisDiagnosticSeverity, Confidence, Diagnostic, DiagnosticKind,
+    Severity,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -8,16 +11,22 @@ pub struct Report {
     pub summary: ReportSummary,
     pub findings: Vec<Diagnostic>,
     pub review_hints: Vec<Diagnostic>,
+    pub analysis_diagnostics: Vec<AnalysisDiagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReportSummary {
     pub findings: usize,
     pub review_hints: usize,
+    pub analysis_diagnostics: usize,
 }
 
 #[must_use]
-pub fn build_report(version: &str, diagnostics: Vec<Diagnostic>) -> Report {
+pub fn build_report(
+    version: &str,
+    diagnostics: Vec<Diagnostic>,
+    analysis_diagnostics: Vec<AnalysisDiagnostic>,
+) -> Report {
     let (findings, review_hints): (Vec<_>, Vec<_>) = diagnostics
         .into_iter()
         .partition(|diagnostic| diagnostic.kind == DiagnosticKind::Finding);
@@ -27,9 +36,11 @@ pub fn build_report(version: &str, diagnostics: Vec<Diagnostic>) -> Report {
         summary: ReportSummary {
             findings: findings.len(),
             review_hints: review_hints.len(),
+            analysis_diagnostics: analysis_diagnostics.len(),
         },
         findings,
         review_hints,
+        analysis_diagnostics,
     }
 }
 
@@ -81,6 +92,19 @@ pub fn render_text(report: &Report) -> String {
             hint.rule_id,
             hint.title
         ));
+    }
+    output.push_str(&format!(
+        "\nAnalysis warnings: {}\n",
+        report.summary.analysis_diagnostics
+    ));
+    for diagnostic in &report.analysis_diagnostics {
+        output.push_str(&format!(
+            "  [{}] {} {}\n",
+            analysis_severity_label(diagnostic.severity),
+            diagnostic.code,
+            analysis_location(diagnostic)
+        ));
+        output.push_str(&format!("    {}\n", diagnostic.message));
     }
 
     if !report.findings.is_empty() {
@@ -194,15 +218,32 @@ fn confidence_label(confidence: Confidence) -> &'static str {
     }
 }
 
+fn analysis_severity_label(severity: AnalysisDiagnosticSeverity) -> &'static str {
+    match severity {
+        AnalysisDiagnosticSeverity::Info => "INFO",
+        AnalysisDiagnosticSeverity::Warning => "WARNING",
+    }
+}
+
+fn analysis_location(diagnostic: &AnalysisDiagnostic) -> String {
+    diagnostic
+        .span
+        .as_ref()
+        .map(rulepath_diagnostics::format_source_location)
+        .or_else(|| diagnostic.file_id.clone())
+        .unwrap_or_else(|| diagnostic.stage.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn separates_report_classes() {
-        let report = build_report("0.1.0", Vec::new());
+        let report = build_report("0.1.0", Vec::new(), Vec::new());
         assert_eq!(report.summary.findings, 0);
         assert_eq!(report.summary.review_hints, 0);
+        assert_eq!(report.summary.analysis_diagnostics, 0);
     }
 
     #[test]
@@ -213,9 +254,11 @@ mod tests {
             summary: ReportSummary {
                 findings: 1,
                 review_hints: 1,
+                analysis_diagnostics: 0,
             },
             findings: vec![diagnostic(DiagnosticKind::Finding, "INV001")],
             review_hints: vec![diagnostic(DiagnosticKind::ReviewHint, "HINT001")],
+            analysis_diagnostics: Vec::new(),
         };
 
         let annotations = render_github_annotations(&report);
@@ -223,6 +266,26 @@ mod tests {
         assert!(annotations.contains("::error file=src/invoices.ts,line=10,col=3"));
         assert!(annotations.contains("INV001"));
         assert!(!annotations.contains("HINT001"));
+    }
+
+    #[test]
+    fn text_output_includes_analysis_warning_summary() {
+        let mut report = build_report("0.1.0", Vec::new(), Vec::new());
+        report.analysis_diagnostics.push(AnalysisDiagnostic {
+            code: "parse_error".to_owned(),
+            severity: AnalysisDiagnosticSeverity::Warning,
+            stage: "parser".to_owned(),
+            message: "could not fully parse src/bad.ts".to_owned(),
+            file_id: Some("src/bad.ts".to_owned()),
+            span: Some(rulepath_ir::SourceSpan::single_line("src/bad.ts", 1)),
+        });
+        report.summary.analysis_diagnostics = report.analysis_diagnostics.len();
+
+        let output = render_text(&report);
+
+        assert!(output.contains("Analysis warnings: 1"));
+        assert!(output.contains("parse_error"));
+        assert!(output.contains("src/bad.ts:1:1"));
     }
 
     fn diagnostic(kind: DiagnosticKind, rule_id: &str) -> Diagnostic {

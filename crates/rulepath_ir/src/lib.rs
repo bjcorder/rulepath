@@ -97,6 +97,23 @@ pub enum DiagnosticKind {
     ReviewHint,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisDiagnosticSeverity {
+    Info,
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AnalysisDiagnostic {
+    pub code: String,
+    pub severity: AnalysisDiagnosticSeverity,
+    pub stage: String,
+    pub message: String,
+    pub file_id: Option<String>,
+    pub span: Option<SourceSpan>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Position {
     pub line: usize,
@@ -247,6 +264,7 @@ pub struct ProjectIr {
     pub evidence: Vec<EvidenceFact>,
     pub operations: Vec<OperationFact>,
     pub call_paths: Vec<CallPath>,
+    pub analysis_diagnostics: Vec<AnalysisDiagnostic>,
 }
 
 impl ProjectIr {

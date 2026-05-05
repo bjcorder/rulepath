@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rulepath_ir::Language;
+use rulepath_ir::{AnalysisDiagnostic, AnalysisDiagnosticSeverity, Language, SourceSpan};
 use rulepath_parsers::{
     extract_suppressions_from_text, span_for_offsets, CallFact, ImportFact, LanguageAdapter,
     ParsedFile, SymbolFact, SymbolKind,
@@ -31,9 +31,10 @@ impl LanguageAdapter for TypeScriptAdapter {
                 &file.text,
                 file.language,
             ),
+            diagnostics: Vec::new(),
         };
 
-        let _parsed_without_panic = parse_with_oxc(file);
+        parsed.diagnostics.extend(parse_with_oxc(file));
 
         parsed.imports = extract_imports(file);
         parsed.symbols = extract_symbols(file);
@@ -48,7 +49,7 @@ pub fn parser_backend() -> &'static str {
 }
 
 #[cfg(feature = "oxc-backend")]
-fn parse_with_oxc(file: &SourceFile) -> bool {
+fn parse_with_oxc(file: &SourceFile) -> Vec<AnalysisDiagnostic> {
     let allocator = oxc_allocator::Allocator::default();
     let source_type = oxc_span::SourceType::from_path(Path::new(file.relative_path.as_str()))
         .unwrap_or_else(|_| {
@@ -63,12 +64,33 @@ fn parse_with_oxc(file: &SourceFile) -> bool {
             }
         });
     let parsed = oxc_parser::Parser::new(&allocator, &file.text, source_type).parse();
-    !parsed.panicked
+    let mut diagnostics = Vec::new();
+    if parsed.panicked {
+        diagnostics.push(parse_diagnostic(
+            file,
+            "parser panicked while parsing TypeScript source",
+        ));
+    }
+    for error in parsed.errors {
+        diagnostics.push(parse_diagnostic(file, &error.to_string()));
+    }
+    diagnostics
 }
 
 #[cfg(not(feature = "oxc-backend"))]
-fn parse_with_oxc(_file: &SourceFile) -> bool {
-    true
+fn parse_with_oxc(_file: &SourceFile) -> Vec<AnalysisDiagnostic> {
+    Vec::new()
+}
+
+fn parse_diagnostic(file: &SourceFile, message: &str) -> AnalysisDiagnostic {
+    AnalysisDiagnostic {
+        code: "parse_error".to_owned(),
+        severity: AnalysisDiagnosticSeverity::Warning,
+        stage: "parser".to_owned(),
+        message: format!("could not fully parse {}: {message}", file.relative_path),
+        file_id: Some(file.relative_path.clone()),
+        span: Some(SourceSpan::single_line(file.relative_path.as_str(), 1)),
+    }
 }
 
 fn extract_imports(file: &SourceFile) -> Vec<ImportFact> {

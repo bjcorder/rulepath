@@ -1,10 +1,16 @@
 use std::collections::BTreeMap;
 
-use rulepath_ir::{Diagnostic, DiagnosticKind, Severity};
+use rulepath_ir::{
+    AnalysisDiagnostic, AnalysisDiagnosticSeverity, Diagnostic, DiagnosticKind, Severity,
+};
 use serde_json::{json, Value};
 
 #[must_use]
-pub fn render_sarif(version: &str, diagnostics: &[Diagnostic]) -> Value {
+pub fn render_sarif(
+    version: &str,
+    diagnostics: &[Diagnostic],
+    analysis_diagnostics: &[AnalysisDiagnostic],
+) -> Value {
     let results = diagnostics
         .iter()
         .map(diagnostic_to_result)
@@ -47,9 +53,45 @@ pub fn render_sarif(version: &str, diagnostics: &[Diagnostic]) -> Value {
                     "rules": rules
                 }
             },
-            "results": results
+            "results": results,
+            "invocations": [{
+                "executionSuccessful": true,
+                "toolExecutionNotifications": analysis_notifications(analysis_diagnostics)
+            }]
         }]
     })
+}
+
+fn analysis_notifications(diagnostics: &[AnalysisDiagnostic]) -> Value {
+    json!(diagnostics
+        .iter()
+        .map(|diagnostic| {
+            json!({
+                "descriptor": {
+                    "id": diagnostic.code
+                },
+                "level": analysis_level(diagnostic.severity),
+                "message": {
+                    "text": diagnostic.message
+                },
+                "locations": diagnostic.span.as_ref().map(|span| {
+                    json!([{
+                        "physicalLocation": {
+                            "artifactLocation": {
+                                "uri": &span.file_id
+                            },
+                            "region": {
+                                "startLine": span.start.line,
+                                "startColumn": span.start.column,
+                                "endLine": span.end.line,
+                                "endColumn": span.end.column
+                            }
+                        }
+                    }])
+                }).unwrap_or_else(|| json!([]))
+            })
+        })
+        .collect::<Vec<_>>())
 }
 
 fn diagnostic_to_result(diagnostic: &Diagnostic) -> Value {
@@ -142,5 +184,12 @@ fn sarif_level(severity: Severity) -> &'static str {
         Severity::Critical | Severity::High => "error",
         Severity::Medium => "warning",
         Severity::Low | Severity::Info => "note",
+    }
+}
+
+fn analysis_level(severity: AnalysisDiagnosticSeverity) -> &'static str {
+    match severity {
+        AnalysisDiagnosticSeverity::Warning => "warning",
+        AnalysisDiagnosticSeverity::Info => "note",
     }
 }

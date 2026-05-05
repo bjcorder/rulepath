@@ -897,6 +897,7 @@ mod tests {
                 },
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_prisma_operations(&file, &parsed, &empty_config());
@@ -925,6 +926,7 @@ mod tests {
                 span: SourceSpan::single_line("src/services/invoices.ts", 2),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_prisma_operations(&file, &parsed, &empty_config());
@@ -966,6 +968,7 @@ mod tests {
                 },
             ],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_prisma_operations(&file, &parsed, &empty_config());
@@ -994,6 +997,7 @@ mod tests {
                 span: SourceSpan::single_line("app/invoice_service.py", 2),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_sqlalchemy_operations(&file, &parsed, &empty_config());
@@ -1035,6 +1039,7 @@ mod tests {
                 },
             ],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_sqlalchemy_operations(&file, &parsed, &empty_config());
@@ -1070,6 +1075,7 @@ mod tests {
                 },
             ],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_django_orm_operations(&file, &parsed, &empty_config());
@@ -1117,6 +1123,7 @@ mod tests {
                 },
             ],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_django_orm_operations(&file, &parsed, &empty_config());
@@ -1152,6 +1159,7 @@ mod tests {
                 span: SourceSpan::single_line("app/views.py", 3),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_django_orm_operations(&file, &parsed, &empty_config());
@@ -1197,6 +1205,7 @@ mod tests {
                 span: SourceSpan::single_line("app/views.py", 2),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let operations = extract_django_orm_operations(&file, &parsed, &empty_config());

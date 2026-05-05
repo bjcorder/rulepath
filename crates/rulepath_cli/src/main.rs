@@ -172,7 +172,11 @@ fn scan_command(path: &Path, format: OutputFormat, ci: bool) -> Result<ExitCode>
         OutputFormat::Text => print!("{}", render_text(&scan.report)),
         OutputFormat::Json => println!("{}", render_json(&scan.report)?),
         OutputFormat::Sarif => {
-            let sarif = rulepath_sarif::render_sarif(VERSION, &all_diagnostics);
+            let sarif = rulepath_sarif::render_sarif(
+                VERSION,
+                &all_diagnostics,
+                &scan.report.analysis_diagnostics,
+            );
             println!("{}", serde_json::to_string_pretty(&sarif)?);
         }
     }
@@ -237,8 +241,9 @@ fn run_scan(path: &Path) -> Result<ScanResult> {
     let config = rulepath_config::load_project_config(path)?;
     let index = rulepath_workspace::scan_workspace(path, &config)?;
     let ir = rulepath_dataflow::build_project_ir(&index, &config);
+    let analysis_diagnostics = ir.analysis_diagnostics.clone();
     let diagnostics = apply_suppressions(rulepath_rules::evaluate(&ir, &config), &index, &config)?;
-    let report = build_report(VERSION, diagnostics);
+    let report = build_report(VERSION, diagnostics, analysis_diagnostics);
     Ok(ScanResult { config, report })
 }
 

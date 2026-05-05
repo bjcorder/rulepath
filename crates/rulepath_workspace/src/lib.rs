@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use camino::Utf8PathBuf;
 use ignore::WalkBuilder;
 use rulepath_config::ResolvedConfig;
-use rulepath_ir::Language;
+use rulepath_ir::{AnalysisDiagnostic, AnalysisDiagnosticSeverity, Language, SourceSpan};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -28,6 +28,7 @@ pub struct SourceFile {
 pub struct WorkspaceIndex {
     pub root: Utf8PathBuf,
     pub files: Vec<SourceFile>,
+    pub analysis_diagnostics: Vec<AnalysisDiagnostic>,
 }
 
 impl WorkspaceIndex {
@@ -46,6 +47,7 @@ pub fn scan_workspace(
         .map_err(|path| WorkspaceError::NonUtf8Root(path.display().to_string()))?;
     let enforce_includes = should_enforce_includes(root, &config.raw.analysis.include_paths);
     let mut files = Vec::new();
+    let mut analysis_diagnostics = Vec::new();
 
     for entry in WalkBuilder::new(root)
         .hidden(false)
@@ -75,8 +77,23 @@ pub fn scan_workspace(
             continue;
         }
 
-        let Ok(text) = fs::read_to_string(path) else {
-            continue;
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => {
+                analysis_diagnostics.push(AnalysisDiagnostic {
+                    code: if error.kind() == std::io::ErrorKind::InvalidData {
+                        "skipped_non_utf8_file".to_owned()
+                    } else {
+                        "skipped_source_file".to_owned()
+                    },
+                    severity: AnalysisDiagnosticSeverity::Warning,
+                    stage: "workspace".to_owned(),
+                    message: format!("skipped source file {}: {error}", relative_path),
+                    file_id: Some(relative_path.clone()),
+                    span: Some(SourceSpan::single_line(relative_path.as_str(), 1)),
+                });
+                continue;
+            }
         };
         let path = Utf8PathBuf::from_path_buf(path.to_path_buf())
             .map_err(|path| WorkspaceError::NonUtf8Path(path.display().to_string()))?;
@@ -92,6 +109,7 @@ pub fn scan_workspace(
     Ok(WorkspaceIndex {
         root: root_utf8,
         files,
+        analysis_diagnostics,
     })
 }
 

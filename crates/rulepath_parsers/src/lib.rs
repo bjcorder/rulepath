@@ -1,4 +1,4 @@
-use rulepath_ir::{Language, SourceSpan};
+use rulepath_ir::{AnalysisDiagnostic, Language, SourceSpan};
 use rulepath_workspace::SourceFile;
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +57,7 @@ pub struct ParsedFile {
     pub symbols: Vec<SymbolFact>,
     pub calls: Vec<CallFact>,
     pub suppressions: Vec<SuppressionFact>,
+    pub diagnostics: Vec<AnalysisDiagnostic>,
 }
 
 pub trait LanguageAdapter {

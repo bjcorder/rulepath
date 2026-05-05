@@ -992,6 +992,7 @@ dependencies = [
 name = "rulepath_reporters"
 version = "0.1.0"
 dependencies = [
+ "rulepath_diagnostics",
  "rulepath_ir",
  "serde",
  "serde_json",

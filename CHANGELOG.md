@@ -26,3 +26,4 @@ All notable changes to Rulepath will be documented here.
 - Stabilize diagnostic fingerprints around semantic route and sink identity, and validate deterministic baseline files.
 - Expand the fixture matrix with v1 rule and review-hint coverage plus safe/unsafe structured assertions.
 - Improve `.rulepath.inferred.yml` generation using IR facts, deterministic strict-config-compatible YAML, and fixture-backed inference tests.
+- Add non-fatal analysis diagnostics for parse errors, unresolved imports, ambiguous resources, and skipped non-UTF8 files.

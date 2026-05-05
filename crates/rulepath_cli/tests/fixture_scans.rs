@@ -915,6 +915,102 @@ fn invalid_baseline_shape_fails_with_clear_error() {
 }
 
 #[test]
+fn parse_error_is_non_fatal_and_separate_in_json() {
+    let dir = unique_temp_dir("analysis-parse-error");
+    fs::create_dir_all(dir.join("app")).expect("fixture dirs should be created");
+    fs::write(dir.join("app/bad.py"), "def broken(:\n    pass\n")
+        .expect("bad source should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", ".", "--format", "json"]);
+
+    assert!(
+        output.status.success(),
+        "parse warnings should not fail scan: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("json output should parse");
+    assert!(json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .is_empty());
+    assert!(json["review_hints"]
+        .as_array()
+        .expect("review_hints should be an array")
+        .is_empty());
+    let diagnostics = json["analysis_diagnostics"]
+        .as_array()
+        .expect("analysis diagnostics should be an array");
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "parse_error"
+            && diagnostic["stage"] == "parser"
+            && diagnostic["file_id"] == "app/bad.py"));
+}
+
+#[test]
+fn text_output_includes_analysis_warning_summary() {
+    let dir = unique_temp_dir("analysis-text-warning");
+    fs::create_dir_all(dir.join("app")).expect("fixture dirs should be created");
+    fs::write(dir.join("app/bad.py"), "def broken(:\n    pass\n")
+        .expect("bad source should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", "."]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert!(stdout.contains("Findings: 0"));
+    assert!(stdout.contains("Analysis warnings: 1"));
+    assert!(stdout.contains("parse_error"));
+    assert!(stdout.contains("app/bad.py"));
+}
+
+#[test]
+fn unresolved_relative_import_is_reported_without_failing_scan() {
+    let dir = unique_temp_dir("analysis-unresolved-import");
+    fs::create_dir_all(dir.join("src/routes")).expect("fixture dirs should be created");
+    fs::write(
+        dir.join("src/routes/invoices.ts"),
+        "import { updateInvoice } from '../services/missing'\nimport { Router } from 'express'\nconst router = Router()\nrouter.patch('/invoices/:invoiceId', async (req, res) => {\n  await updateInvoice(req.params.invoiceId, req.body)\n  res.sendStatus(204)\n})\n",
+    )
+    .expect("route source should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", ".", "--format", "json"]);
+
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("json output should parse");
+    let diagnostics = json["analysis_diagnostics"]
+        .as_array()
+        .expect("analysis diagnostics should be an array");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["code"] == "unresolved_import"
+            && diagnostic["stage"] == "dataflow"
+            && diagnostic["file_id"] == "src/routes/invoices.ts"
+    }));
+}
+
+#[test]
+fn non_utf8_source_file_is_skipped_with_analysis_warning() {
+    let dir = unique_temp_dir("analysis-non-utf8");
+    fs::create_dir_all(dir.join("src")).expect("fixture dirs should be created");
+    fs::write(dir.join("src/binary.ts"), [0xff, 0xfe, 0xfd])
+        .expect("binary source should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", ".", "--format", "json"]);
+
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("json output should parse");
+    let diagnostics = json["analysis_diagnostics"]
+        .as_array()
+        .expect("analysis diagnostics should be an array");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["code"] == "skipped_non_utf8_file" && diagnostic["stage"] == "workspace"
+    }));
+}
+
+#[test]
 fn ci_fail_false_remains_advisory_with_findings() {
     let source = fixture_path("fixtures/express_prisma/unsafe");
     let dir = unique_temp_dir("ci-advisory");

@@ -1123,6 +1123,7 @@ mod tests {
                 span: SourceSpan::single_line("src/routes/invoices.ts", 3),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let facts = extract_express(&file, &parsed, 0);
@@ -1155,6 +1156,7 @@ mod tests {
                 span: SourceSpan::single_line("src/routes/invoices.ts", 10),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let facts = extract_express(&file, &parsed, 0);
@@ -1194,6 +1196,7 @@ mod tests {
                 span: SourceSpan::single_line("app/routes.py", 3),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let facts = extract_fastapi(&file, &parsed, 0);
@@ -1226,6 +1229,7 @@ mod tests {
             ],
             calls: Vec::new(),
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let facts = extract_nextjs(&file, &parsed, 0);
@@ -1260,6 +1264,7 @@ mod tests {
             }],
             calls: Vec::new(),
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let facts = extract_nextjs(&file, &parsed, 0);
@@ -1307,6 +1312,7 @@ mod tests {
                 },
             ],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let facts = extract_fastapi(&file, &parsed, 0);
@@ -1414,6 +1420,7 @@ mod tests {
                 span: SourceSpan::single_line("app/urls.py", 5),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let facts = extract_django(&file, &parsed, 0);

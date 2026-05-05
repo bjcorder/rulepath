@@ -328,6 +328,7 @@ mod tests {
                 },
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let evidence = normalize_file_evidence(&file, &parsed, &config);
