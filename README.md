@@ -138,7 +138,7 @@ Review hints: 1
   [MEDIUM] HINT003 Possible workflow state transition
 ```
 
-CI is advisory by default. `rulepath scan . --ci` exits nonzero only when `.rulepath.yml` sets `ci.fail: true` and an unsuppressed, non-baselined finding matches `ci.fail_on`.
+CI is advisory by default. `rulepath scan . --ci` exits nonzero only when `.rulepath.yml` sets `ci.fail: true` and an unsuppressed, non-baselined finding matches `ci.fail_on`. Baseline fingerprints include sink identity and primary span location, so regenerate baselines after upgrades that change fingerprint inputs.
 
 ## Documentation
 
