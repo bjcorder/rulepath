@@ -370,6 +370,7 @@ fn load_baseline(path: &Path, file_name: &str) -> Result<BTreeSet<String>> {
         .with_context(|| format!("failed to read baseline {}", baseline_path.display()))?;
     let baseline: BaselineFile = serde_json::from_str(&text)
         .with_context(|| format!("failed to parse baseline {}", baseline_path.display()))?;
+    baseline.validate(&baseline_path)?;
     Ok(baseline
         .findings
         .into_iter()
@@ -454,6 +455,7 @@ fn confidence_key(confidence: Confidence) -> &'static str {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BaselineFile {
     version: u32,
     findings: Vec<BaselineEntry>,
@@ -462,7 +464,7 @@ struct BaselineFile {
 
 impl BaselineFile {
     fn from_report(report: &Report) -> Self {
-        Self {
+        let mut baseline = Self {
             version: 1,
             findings: report.findings.iter().map(BaselineEntry::from).collect(),
             review_hints: report
@@ -470,15 +472,52 @@ impl BaselineFile {
                 .iter()
                 .map(BaselineEntry::from)
                 .collect(),
+        };
+        baseline.sort();
+        baseline
+    }
+
+    fn sort(&mut self) {
+        self.findings.sort();
+        self.review_hints.sort();
+    }
+
+    fn validate(&self, path: &Path) -> Result<()> {
+        if self.version != 1 {
+            bail!(
+                "invalid baseline {}: unsupported version {}",
+                path.display(),
+                self.version
+            );
         }
+        for entry in self.findings.iter().chain(self.review_hints.iter()) {
+            entry.validate(path)?;
+        }
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BaselineEntry {
     rule_id: String,
     fingerprint: String,
     title: String,
+}
+
+impl BaselineEntry {
+    fn validate(&self, path: &Path) -> Result<()> {
+        if self.rule_id.trim().is_empty()
+            || self.fingerprint.trim().is_empty()
+            || self.title.trim().is_empty()
+        {
+            bail!(
+                "invalid baseline {}: entries must include rule_id, fingerprint, and title",
+                path.display()
+            );
+        }
+        Ok(())
+    }
 }
 
 impl From<&Diagnostic> for BaselineEntry {

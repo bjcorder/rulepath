@@ -1,7 +1,7 @@
 use rulepath_config::{InvariantConfig, ResolvedConfig};
 use rulepath_ir::{
     fingerprint, CallPath, Confidence, Diagnostic, DiagnosticKind, EvidenceFact, EvidenceKind,
-    OperationFact, OperationType, ProjectIr, Severity,
+    OperationFact, OperationType, ProjectIr, RouteFact, Severity,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +30,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                 "INV001",
                 format!("Unscoped {} access", operation.resource),
                 operation,
-                route_id,
+                route,
                 call_path,
                 "Resource access requires tenant/client/object scope.",
                 observed_labels(&evidence),
@@ -44,7 +44,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                 "INV002",
                 format!("Client-controlled {} fields", operation.resource),
                 operation,
-                route_id,
+                route,
                 call_path,
                 "Server-owned or sensitive fields must not be directly controlled by the client.",
                 observed_labels(&evidence),
@@ -61,7 +61,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                     operation.resource
                 ),
                 operation,
-                route_id,
+                route,
                 call_path,
                 "Sensitive mutations require operation-specific authorization.",
                 observed_labels(&evidence),
@@ -75,7 +75,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                 "INV004",
                 format!("{} state transition lacks required evidence", operation.resource),
                 operation,
-                route_id,
+                route,
                 call_path,
                 "Configured state transitions require invariant evidence.",
                 observed_labels(&evidence),
@@ -89,7 +89,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                 "INV005",
                 format!("{} operation lacks idempotency", operation.resource),
                 operation,
-                route_id,
+                route,
                 call_path,
                 "Configured sensitive operations require idempotency evidence.",
                 observed_labels(&evidence),
@@ -103,7 +103,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                 "INV006",
                 format!("Bulk {} mutation without scope", operation.resource),
                 operation,
-                route_id,
+                route,
                 call_path,
                 "Bulk update/delete requires tenant/client/object scope.",
                 observed_labels(&evidence),
@@ -117,7 +117,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                 "INV007",
                 format!("{} export without permission or scope", operation.resource),
                 operation,
-                route_id,
+                route,
                 call_path,
                 "Export/download/report operations require permission and scope.",
                 observed_labels(&evidence),
@@ -141,7 +141,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
                 "INV008",
                 format!("Sensitive {} mutation reachable from insufficiently protected route", operation.resource),
                 operation,
-                route_id,
+                route,
                 call_path,
                 "Service-layer sensitive mutations require inherited or local auth and scope evidence.",
                 observed_labels(&evidence),
@@ -154,7 +154,7 @@ pub fn evaluate(ir: &ProjectIr, config: &ResolvedConfig) -> Vec<Diagnostic> {
             operation,
             config,
             &evidence,
-            route_id,
+            route,
             call_path,
             &mut diagnostics,
         );
@@ -386,16 +386,17 @@ fn emit_hints(
     operation: &OperationFact,
     config: &ResolvedConfig,
     evidence: &[&EvidenceFact],
-    route_id: Option<&str>,
+    route: Option<&RouteFact>,
     call_path: Option<&CallPath>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let route_id = route.map(|route| route.id.as_str());
     if config.resource(&operation.resource).is_none() && operation.resource != "Unknown" {
         diagnostics.push(hint(
             "HINT001",
             format!("Possible resource not configured: {}", operation.resource),
             operation,
-            route_id,
+            route,
             call_path,
             "Add this resource to .rulepath.yml if it is business-sensitive.",
         ));
@@ -406,7 +407,7 @@ fn emit_hints(
             "HINT002",
             "Possible authorization helper not configured".to_owned(),
             operation,
-            route_id,
+            route,
             call_path,
             "Add the helper to auth.authorization_functions if it is required authorization evidence.",
         ));
@@ -423,7 +424,7 @@ fn emit_hints(
             "HINT003",
             format!("Possible {} workflow transition", operation.resource),
             operation,
-            route_id,
+            route,
             call_path,
             "Consider adding a state_transition invariant.",
         ));
@@ -437,7 +438,7 @@ fn emit_hints(
             "HINT004",
             format!("Possible money-like {} operation", operation.resource),
             operation,
-            route_id,
+            route,
             call_path,
             "Configure idempotency or operation authorization invariants for money movement.",
         ));
@@ -452,7 +453,7 @@ fn emit_hints(
             "HINT005",
             "Export-like endpoint with unclear resource".to_owned(),
             operation,
-            route_id,
+            route,
             call_path,
             "Configure the exported resource and required permission.",
         ));
@@ -467,7 +468,7 @@ fn emit_hints(
             "HINT006",
             format!("Auth present but {} scope is unclear", operation.resource),
             operation,
-            route_id,
+            route,
             call_path,
             "Add tenant or object-scope evidence.",
         ));
@@ -478,7 +479,7 @@ fn finding(
     rule_id: &str,
     title: String,
     operation: &OperationFact,
-    route_id: Option<&str>,
+    route: Option<&RouteFact>,
     call_path: Option<&CallPath>,
     missing_invariant: &str,
     observed_evidence: Vec<String>,
@@ -492,7 +493,7 @@ fn finding(
         Severity::High,
         Confidence::High,
         operation,
-        route_id,
+        route,
         call_path,
         Some(missing_invariant.to_owned()),
         observed_evidence,
@@ -505,7 +506,7 @@ fn hint(
     rule_id: &str,
     title: String,
     operation: &OperationFact,
-    route_id: Option<&str>,
+    route: Option<&RouteFact>,
     call_path: Option<&CallPath>,
     suggested_action: &str,
 ) -> Diagnostic {
@@ -516,7 +517,7 @@ fn hint(
         Severity::Medium,
         Confidence::Medium,
         operation,
-        route_id,
+        route,
         call_path,
         None,
         Vec::new(),
@@ -532,7 +533,7 @@ fn diagnostic(
     severity: Severity,
     confidence: Confidence,
     operation: &OperationFact,
-    route_id: Option<&str>,
+    route: Option<&RouteFact>,
     call_path: Option<&CallPath>,
     missing_invariant: Option<String>,
     observed_evidence: Vec<String>,
@@ -552,8 +553,7 @@ fn diagnostic(
         .collect::<Vec<_>>();
     source_ids.sort();
     source_ids.dedup();
-    let span_line = operation.span.start.line.to_string();
-    let span_column = operation.span.start.column.to_string();
+    let route_id = route.map(|route| route.id.as_str());
 
     Diagnostic {
         kind,
@@ -575,18 +575,76 @@ fn diagnostic(
         observed_evidence,
         expected_evidence,
         suggested_fix,
-        fingerprint: fingerprint(&[
-            rule_id,
-            route_id.unwrap_or("no-route"),
-            &operation.id,
-            &operation.resource,
-            &format!("{:?}", operation.operation),
-            &operation.method,
-            &operation.span.file_id,
-            &span_line,
-            &span_column,
-        ]),
+        fingerprint: diagnostic_fingerprint(rule_id, route, operation),
     }
+}
+
+fn diagnostic_fingerprint(
+    rule_id: &str,
+    route: Option<&RouteFact>,
+    operation: &OperationFact,
+) -> String {
+    let framework = route
+        .map(|route| format!("{:?}", route.framework))
+        .unwrap_or_else(|| "no-framework".to_owned());
+    let route_method = route
+        .map(|route| route.method.clone())
+        .unwrap_or_else(|| "no-route-method".to_owned());
+    let route_path = route
+        .map(|route| normalize_identity(route.path.as_str()))
+        .unwrap_or_else(|| "no-route-path".to_owned());
+    let operation_kind = format!("{:?}", operation.operation);
+    let sink_kind = format!("{:?}", operation.data_layer);
+    let sink_method = normalize_identity(operation.method.as_str());
+    let sink_expression = normalized_sink_expression(operation);
+    let file_path = normalize_identity(operation.span.file_id.as_str());
+    let parts = [
+        rule_id.to_owned(),
+        framework,
+        route_method,
+        route_path,
+        operation.resource.clone(),
+        operation_kind,
+        sink_kind,
+        sink_method,
+        sink_expression,
+        file_path,
+    ];
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    fingerprint(&refs)
+}
+
+fn normalized_sink_expression(operation: &OperationFact) -> String {
+    let mut filter_fields = operation
+        .filters
+        .iter()
+        .map(|filter| normalize_identity(filter.field.as_str()))
+        .collect::<Vec<_>>();
+    filter_fields.sort();
+    filter_fields.dedup();
+    let mut mutation_fields = operation
+        .mutation_fields
+        .iter()
+        .map(|field| normalize_identity(field.field.as_str()))
+        .collect::<Vec<_>>();
+    mutation_fields.sort();
+    mutation_fields.dedup();
+    format!(
+        "method={};filters={};mutation_fields={};bulk={}",
+        normalize_identity(operation.method.as_str()),
+        filter_fields.join(","),
+        mutation_fields.join(","),
+        operation.bulk
+    )
+}
+
+fn normalize_identity(value: &str) -> String {
+    value
+        .trim()
+        .replace('\\', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn has_request_controlled_id(operation: &OperationFact) -> bool {
@@ -1054,51 +1112,61 @@ mod tests {
     }
 
     #[test]
-    fn same_shaped_findings_at_different_sinks_have_distinct_fingerprints() {
+    fn semantic_fingerprint_ignores_sink_line_number_changes() {
         let config = config_with_invoice_resource();
-        let ir = ProjectIr {
-            routes: vec![RouteFact {
-                id: "route:express:patch:/invoices/:id".to_owned(),
-                framework: Framework::Express,
-                language: Language::TypeScript,
-                method: "PATCH".to_owned(),
-                path: "/invoices/:id".to_owned(),
-                handler: "updateInvoice".to_owned(),
-                span: span(1, 1),
-                middleware: Vec::new(),
-                sources: vec!["source:route-param".to_owned()],
-            }],
-            operations: vec![
-                operation("sink:prisma.invoice.update:src/invoices.ts:10", 10),
-                operation("sink:prisma.invoice.update:src/invoices.ts:20", 20),
-            ],
-            call_paths: vec![
-                call_path(
-                    "callpath:route:express:patch:/invoices/:id:sink:10",
-                    "sink:prisma.invoice.update:src/invoices.ts:10",
-                ),
-                call_path(
-                    "callpath:route:express:patch:/invoices/:id:sink:20",
-                    "sink:prisma.invoice.update:src/invoices.ts:20",
-                ),
-            ],
-            ..ProjectIr::default()
-        };
+        let before = first_rule_fingerprint(
+            &ir_with_operation(operation(
+                "sink:prisma.invoice.update:src/invoices.ts:10",
+                10,
+            )),
+            &config,
+            "INV001",
+        );
+        let after = first_rule_fingerprint(
+            &ir_with_operation(operation(
+                "sink:prisma.invoice.update:src/invoices.ts:20",
+                20,
+            )),
+            &config,
+            "INV001",
+        );
 
-        let diagnostics = evaluate(&ir, &config);
-        let inv001 = diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.rule_id == "INV001")
-            .collect::<Vec<_>>();
-        let repeated = evaluate(&ir, &config);
-        let repeated_inv001 = repeated
-            .iter()
-            .filter(|diagnostic| diagnostic.rule_id == "INV001")
-            .collect::<Vec<_>>();
+        assert_eq!(before, after);
+    }
 
-        assert_eq!(inv001.len(), 2);
-        assert_ne!(inv001[0].fingerprint, inv001[1].fingerprint);
-        assert_eq!(inv001, repeated_inv001);
+    #[test]
+    fn semantic_fingerprint_changes_for_route_resource_operation_or_sink_method() {
+        let config = config_with_invoice_resource();
+        let base = first_rule_fingerprint(
+            &ir_with_operation(operation("sink:base", 10)),
+            &config,
+            "INV001",
+        );
+
+        let mut route_changed = ir_with_operation(operation("sink:base", 10));
+        route_changed.routes[0].path = "/clients/:id".to_owned();
+        let route_changed = first_rule_fingerprint(&route_changed, &config, "INV001");
+
+        let resource_changed = first_rule_fingerprint(
+            &ir_with_operation(operation_with_resource("sink:base", "Client", 10)),
+            &config_with_resources(&["Client"]),
+            "INV001",
+        );
+
+        let operation_changed = first_rule_fingerprint(
+            &ir_with_operation(read_operation("sink:base", 10)),
+            &config,
+            "INV001",
+        );
+
+        let mut sink_method_ir = ir_with_operation(operation("sink:base", 10));
+        sink_method_ir.operations[0].method = "prisma.invoice.delete".to_owned();
+        let sink_method_changed = first_rule_fingerprint(&sink_method_ir, &config, "INV001");
+
+        assert_ne!(base, route_changed);
+        assert_ne!(base, resource_changed);
+        assert_ne!(base, operation_changed);
+        assert_ne!(base, sink_method_changed);
     }
 
     fn assert_has_rule(ir: &ProjectIr, config: &ResolvedConfig, rule_id: &str) {
@@ -1117,6 +1185,14 @@ mod tests {
                 .all(|diagnostic| diagnostic.rule_id != rule_id),
             "{rule_id} should not be emitted"
         );
+    }
+
+    fn first_rule_fingerprint(ir: &ProjectIr, config: &ResolvedConfig, rule_id: &str) -> String {
+        evaluate(ir, config)
+            .into_iter()
+            .find(|diagnostic| diagnostic.rule_id == rule_id)
+            .unwrap_or_else(|| panic!("{rule_id} should be emitted"))
+            .fingerprint
     }
 
     fn config_with_invoice_resource() -> ResolvedConfig {
@@ -1245,6 +1321,14 @@ mod tests {
         }
     }
 
+    fn read_operation(id: &str, line: usize) -> OperationFact {
+        let mut operation = operation(id, line);
+        operation.operation = OperationType::Read;
+        operation.method = "findUnique".to_owned();
+        operation.mutation_fields.clear();
+        operation
+    }
+
     fn external_operation(id: &str, line: usize) -> OperationFact {
         OperationFact {
             id: id.to_owned(),
@@ -1321,10 +1405,6 @@ mod tests {
             route_id: None,
             ..evidence(kind, label)
         }
-    }
-
-    fn call_path(id: &str, sink_id: &str) -> CallPath {
-        call_path_with_frames(id, sink_id, 1)
     }
 
     fn call_path_with_frames(id: &str, sink_id: &str, frame_count: usize) -> CallPath {

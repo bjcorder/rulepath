@@ -38,7 +38,9 @@ Exit behavior:
 
 `ci.baseline_file` must be a relative path inside the scan root. Absolute paths and paths containing `..` are rejected for both baseline creation and CI reads.
 
-Baseline fingerprints include the rule, route, sink identity, resource, operation, method, file, and primary span start. Regenerate baselines after upgrades that change fingerprint inputs.
+Baseline fingerprints are semantic identifiers, not source-line identifiers. They include the rule, framework, route method and path, resource, operation, sink kind and method, normalized sink shape, and normalized file path when available. Line and column data remain diagnostic metadata only, so whitespace changes and nearby unrelated edits should not invalidate a baseline entry.
+
+Baseline files preserve separate `findings` and `review_hints` entries, are written in deterministic sorted order, and must use the supported baseline schema version. Invalid JSON, unsupported versions, unknown fields, or entries missing `rule_id`, `fingerprint`, or `title` fail the scan with a fatal baseline error.
 
 Suppressions are applied before reporting, baseline creation, and CI failure decisions. When suppression reasons are required, a bare disabling comment is a scan error rather than a hidden finding.
 

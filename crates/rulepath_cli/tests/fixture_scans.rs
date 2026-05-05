@@ -66,6 +66,19 @@ fn copy_dir_all(from: &Path, to: &Path) {
     }
 }
 
+fn first_finding_fingerprint(json: &serde_json::Value, rule_id: &str) -> String {
+    json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .iter()
+        .find(|finding| finding["rule_id"] == rule_id)
+        .unwrap_or_else(|| panic!("{rule_id} should be emitted"))
+        .get("fingerprint")
+        .and_then(serde_json::Value::as_str)
+        .expect("fingerprint should be a string")
+        .to_owned()
+}
+
 #[test]
 fn express_prisma_unsafe_emits_first_milestone_findings() {
     let path = fixture_path("fixtures/express_prisma/unsafe");
@@ -561,6 +574,149 @@ fn ci_failure_respects_baseline() {
         "ci stderr: {}",
         String::from_utf8_lossy(&second_ci.stderr)
     );
+}
+
+#[test]
+fn baseline_fingerprint_survives_unrelated_sink_line_movement() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("stable-fingerprint-line-move");
+    copy_dir_all(&source, &dir);
+
+    let before_stdout = run_rulepath_in(&dir, &["scan", ".", "--format", "json"]);
+    assert!(before_stdout.status.success());
+    let before_json: serde_json::Value =
+        serde_json::from_slice(&before_stdout.stdout).expect("json output should parse");
+    let before = first_finding_fingerprint(&before_json, "INV001");
+
+    let service_path = dir.join("src/services/invoices.ts");
+    let service = fs::read_to_string(&service_path).expect("service fixture should be readable");
+    fs::write(
+        &service_path,
+        service.replace(
+            "export async function updateInvoice",
+            "\n\n\nexport async function updateInvoice",
+        ),
+    )
+    .expect("service fixture should be updated");
+
+    let after_stdout = run_rulepath_in(&dir, &["scan", ".", "--format", "json"]);
+    assert!(after_stdout.status.success());
+    let after_json: serde_json::Value =
+        serde_json::from_slice(&after_stdout.stdout).expect("json output should parse");
+    let after = first_finding_fingerprint(&after_json, "INV001");
+
+    assert_eq!(before, after);
+}
+
+#[test]
+fn ci_new_findings_only_uses_stable_fingerprint_after_line_movement() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("stable-baseline-line-move");
+    copy_dir_all(&source, &dir);
+    fs::write(
+        dir.join(".rulepath.yml"),
+        "version: 1\nprofile:\n  name: internal_web_app\nci:\n  fail: true\n",
+    )
+    .expect("test config should be written");
+
+    let baseline = run_rulepath_in(&dir, &["baseline", "create", "."]);
+    assert!(
+        baseline.status.success(),
+        "baseline stderr: {}",
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    let service_path = dir.join("src/services/invoices.ts");
+    let service = fs::read_to_string(&service_path).expect("service fixture should be readable");
+    fs::write(
+        &service_path,
+        service.replace(
+            "export async function updateInvoice",
+            "\n\n\nexport async function updateInvoice",
+        ),
+    )
+    .expect("service fixture should be updated");
+
+    let ci = run_rulepath_in(&dir, &["scan", ".", "--ci"]);
+
+    assert!(
+        ci.status.success(),
+        "stable fingerprint should keep baseline effective after line movement: {}",
+        String::from_utf8_lossy(&ci.stderr)
+    );
+}
+
+#[test]
+fn baseline_create_writes_deterministic_sorted_output() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("deterministic-baseline");
+    copy_dir_all(&source, &dir);
+
+    let first = run_rulepath_in(&dir, &["baseline", "create", "."]);
+    assert!(first.status.success());
+    let first_text = fs::read_to_string(dir.join(".rulepath.baseline.json"))
+        .expect("baseline should be readable");
+    let second = run_rulepath_in(&dir, &["baseline", "create", ".", "--force"]);
+    assert!(second.status.success());
+    let second_text = fs::read_to_string(dir.join(".rulepath.baseline.json"))
+        .expect("baseline should be readable");
+    let baseline: serde_json::Value =
+        serde_json::from_str(&first_text).expect("baseline should parse");
+    let fingerprints = baseline["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .iter()
+        .map(|entry| {
+            (
+                entry["rule_id"].as_str().unwrap_or_default().to_owned(),
+                entry["fingerprint"].as_str().unwrap_or_default().to_owned(),
+                entry["title"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut sorted = fingerprints.clone();
+    sorted.sort();
+
+    assert_eq!(first_text, second_text);
+    assert_eq!(fingerprints, sorted);
+}
+
+#[test]
+fn invalid_baseline_json_fails_with_clear_error() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("invalid-baseline-json");
+    copy_dir_all(&source, &dir);
+    fs::write(dir.join(".rulepath.yml"), "version: 1\nci:\n  fail: true\n")
+        .expect("test config should be written");
+    fs::write(dir.join(".rulepath.baseline.json"), "{not valid json")
+        .expect("invalid baseline should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", ".", "--ci"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("failed to parse baseline"));
+    assert!(stderr.contains(".rulepath.baseline.json"));
+}
+
+#[test]
+fn invalid_baseline_shape_fails_with_clear_error() {
+    let source = fixture_path("fixtures/express_prisma/unsafe");
+    let dir = unique_temp_dir("invalid-baseline-shape");
+    copy_dir_all(&source, &dir);
+    fs::write(dir.join(".rulepath.yml"), "version: 1\nci:\n  fail: true\n")
+        .expect("test config should be written");
+    fs::write(
+        dir.join(".rulepath.baseline.json"),
+        r#"{"version":2,"findings":[],"review_hints":[]}"#,
+    )
+    .expect("invalid baseline should be written");
+
+    let output = run_rulepath_in(&dir, &["scan", ".", "--ci"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid baseline"));
+    assert!(stderr.contains("unsupported version 2"));
 }
 
 #[test]
