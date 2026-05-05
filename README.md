@@ -140,6 +140,8 @@ Review hints: 1
 
 CI is advisory by default. `rulepath scan . --ci` exits nonzero only when `.rulepath.yml` sets `ci.fail: true` and an unsuppressed, non-baselined finding matches `ci.fail_on`. Baseline fingerprints include sink identity and primary span location, so regenerate baselines after upgrades that change fingerprint inputs.
 
+Findings are high-confidence invariant violations; review hints are medium-confidence observations for missing configuration or uncertain business semantics. Both classes remain separate in text, JSON, SARIF, and baseline output.
+
 ## Documentation
 
 - [Product requirements](docs/product.md)

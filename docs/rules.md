@@ -31,3 +31,9 @@ Rulepath emits high-confidence findings for invariant violations and medium-conf
 Every finding should include rule ID, title, severity, confidence, resource, operation, route, call path, request-controlled source, sink, missing invariant, observed evidence, expected evidence, suggested fix, and stable fingerprint.
 
 Rules must evaluate IR and config only.
+
+## Evaluation Contract
+
+Findings are reserved for high-confidence invariant violations. `INV003`, `INV004`, `INV005`, `INV007`, and `INV008` use normalized evidence from the IR and configured invariants to decide whether authorization, transition, idempotency, permission, and scope requirements are satisfied. Uncertain observations remain review hints.
+
+Review hints are medium-confidence diagnostics and stay separate from findings in text, JSON, SARIF, and baselines. `HINT002` flags authorization-looking helpers that are not configured, and `HINT004` flags money-like operations that may need idempotency or operation authorization invariants.

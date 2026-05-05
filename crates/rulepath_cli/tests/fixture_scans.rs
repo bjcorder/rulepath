@@ -254,6 +254,26 @@ fn json_output_includes_observed_evidence_labels() {
         .map(|value| value.as_str().expect("evidence label should be a string"))
         .collect::<Vec<_>>();
     assert!(observed.contains(&"authentication:requireAuth"));
+    assert_eq!(finding["severity"].as_str(), Some("high"));
+    assert_eq!(finding["confidence"].as_str(), Some("high"));
+    assert!(finding["missing_invariant"]
+        .as_str()
+        .expect("missing invariant should be present")
+        .contains("scope"));
+    assert!(finding["expected_evidence"]
+        .as_array()
+        .expect("expected evidence should be an array")
+        .iter()
+        .any(|value| value == "tenant_scope or object_scope"));
+    assert!(finding["suggested_fix"]
+        .as_str()
+        .expect("suggested fix should be present")
+        .contains("scope"));
+    assert!(json["review_hints"]
+        .as_array()
+        .expect("review hints should be an array")
+        .iter()
+        .all(|hint| hint["confidence"] == "medium"));
 }
 
 #[test]
@@ -265,6 +285,20 @@ fn text_output_shows_call_path_frames() {
     assert!(normalized.contains("src/routes/invoices.ts:10 inline_handler()"));
     assert!(normalized.contains("src/services/invoices.ts:"));
     assert!(normalized.contains("updateInvoice()"));
+}
+
+#[test]
+fn explain_covers_v1_rule_and_hint_catalog() {
+    for rule_id in [
+        "INV001", "INV002", "INV003", "INV004", "INV005", "INV006", "INV007", "INV008", "HINT001",
+        "HINT002", "HINT003", "HINT004", "HINT005", "HINT006",
+    ] {
+        let stdout = run_rulepath(&["explain", rule_id]);
+        assert!(stdout.contains(rule_id));
+        assert!(stdout.contains("Detect") || stdout.contains("Identify"));
+        assert!(stdout.contains("Safe patterns:"));
+        assert!(stdout.contains("Config keys:"));
+    }
 }
 
 #[test]
