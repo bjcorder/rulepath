@@ -18,6 +18,8 @@ rulepath explain INV001
 
 ## CI Policy
 
+`rulepath infer .` writes a deterministic `.rulepath.inferred.yml` draft using parsed route, sink, resource, and evidence facts. The draft remains advisory: scans do not consume it unless reviewed content is copied into `.rulepath.yml`.
+
 ```yaml
 ci:
   fail: true
@@ -38,9 +40,21 @@ Exit behavior:
 
 `ci.baseline_file` must be a relative path inside the scan root. Absolute paths and paths containing `..` are rejected for both baseline creation and CI reads.
 
-Baseline fingerprints include the rule, route, sink identity, resource, operation, method, file, and primary span start. Regenerate baselines after upgrades that change fingerprint inputs.
+Baseline fingerprints are semantic identifiers, not source-line identifiers. They include the rule, framework, route method and path, resource, operation, sink kind and method, normalized sink shape, and normalized file path when available. Line and column data remain diagnostic metadata only, so whitespace changes and nearby unrelated edits should not invalidate a baseline entry.
+
+Baseline files preserve separate `findings` and `review_hints` entries, are written in deterministic sorted order, and must use the supported baseline schema version. Invalid JSON, unsupported versions, unknown fields, or entries missing `rule_id`, `fingerprint`, or `title` fail the scan with a fatal baseline error.
 
 Suppressions are applied before reporting, baseline creation, and CI failure decisions. When suppression reasons are required, a bare disabling comment is a scan error rather than a hidden finding.
+
+## Fatal And Non-Fatal Diagnostics
+
+Fatal errors stop the command with a nonzero exit. These include invalid `.rulepath.yml`, invalid baseline JSON or schema, unsafe configured output paths, and output write failures.
+
+Non-fatal analyzer diagnostics do not fail a normal scan. Parse errors in individual files, unresolved relative imports, ambiguous resource inference, and skipped non-UTF8 source files are reported as analysis warnings. Text output includes an `Analysis warnings` summary, JSON output exposes them in a separate `analysis_diagnostics` array, and SARIF output records them as tool execution notifications. Findings and review hints remain separate from analyzer health diagnostics.
+
+## GitHub Actions Annotations
+
+When `rulepath scan --ci` runs with `GITHUB_ACTIONS=true`, Rulepath emits GitHub Actions `::error` annotations for findings only. Annotations use the finding primary span for file, line, and column, and are written to stderr so JSON and SARIF stdout remain parseable. Review hints are not annotated unless a future policy explicitly opts them in.
 
 ## JSON Output
 
@@ -58,3 +72,9 @@ JSON output keeps findings and review hints in separate arrays:
   "review_hints": []
 }
 ```
+
+Findings and review hints include call-path frames when tracing can connect a route to a sink.
+
+## SARIF Output
+
+SARIF output includes stable rule metadata, result locations, `partialFingerprints.rulepathFingerprint`, diagnostic properties, and `codeFlows` when call-path frames are available. Finding results use SARIF `error` level; review hints remain marked as `review_hint` in result properties.

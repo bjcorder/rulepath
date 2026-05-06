@@ -9,7 +9,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use rulepath_config::{starter_config, validate_config, ResolvedConfig};
 use rulepath_ir::{Confidence, Diagnostic, DiagnosticKind, Severity};
 use rulepath_parsers::{extract_suppressions_from_text, SuppressionFact, SuppressionScope};
-use rulepath_reporters::{build_report, render_json, render_text, Report};
+use rulepath_reporters::{
+    build_report, render_github_annotations, render_json, render_text, Report,
+};
 use rulepath_workspace::WorkspaceIndex;
 use serde::{Deserialize, Serialize};
 
@@ -134,7 +136,7 @@ fn init(profile: &str, force: bool) -> Result<ExitCode> {
 fn infer(path: &Path, force: bool) -> Result<ExitCode> {
     let config = rulepath_config::load_project_config(path)?;
     let index = rulepath_workspace::scan_workspace(path, &config)?;
-    let inferred = rulepath_infer::infer(&index);
+    let inferred = rulepath_infer::infer(&index, &config);
     let output_path = project_output_path(
         path,
         &config.raw.inference.generated_file,
@@ -170,9 +172,16 @@ fn scan_command(path: &Path, format: OutputFormat, ci: bool) -> Result<ExitCode>
         OutputFormat::Text => print!("{}", render_text(&scan.report)),
         OutputFormat::Json => println!("{}", render_json(&scan.report)?),
         OutputFormat::Sarif => {
-            let sarif = rulepath_sarif::render_sarif(VERSION, &all_diagnostics);
+            let sarif = rulepath_sarif::render_sarif(
+                VERSION,
+                &all_diagnostics,
+                &scan.report.analysis_diagnostics,
+            );
             println!("{}", serde_json::to_string_pretty(&sarif)?);
         }
+    }
+    if ci && github_actions_enabled() {
+        eprint!("{}", render_github_annotations(&scan.report));
     }
 
     if ci && should_fail_ci(path, &scan.config, &scan.report)? {
@@ -180,6 +189,10 @@ fn scan_command(path: &Path, format: OutputFormat, ci: bool) -> Result<ExitCode>
     } else {
         Ok(ExitCode::SUCCESS)
     }
+}
+
+fn github_actions_enabled() -> bool {
+    std::env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true")
 }
 
 fn baseline_create(path: &Path, force: bool) -> Result<ExitCode> {
@@ -228,8 +241,9 @@ fn run_scan(path: &Path) -> Result<ScanResult> {
     let config = rulepath_config::load_project_config(path)?;
     let index = rulepath_workspace::scan_workspace(path, &config)?;
     let ir = rulepath_dataflow::build_project_ir(&index, &config);
+    let analysis_diagnostics = ir.analysis_diagnostics.clone();
     let diagnostics = apply_suppressions(rulepath_rules::evaluate(&ir, &config), &index, &config)?;
-    let report = build_report(VERSION, diagnostics);
+    let report = build_report(VERSION, diagnostics, analysis_diagnostics);
     Ok(ScanResult { config, report })
 }
 
@@ -361,6 +375,7 @@ fn load_baseline(path: &Path, file_name: &str) -> Result<BTreeSet<String>> {
         .with_context(|| format!("failed to read baseline {}", baseline_path.display()))?;
     let baseline: BaselineFile = serde_json::from_str(&text)
         .with_context(|| format!("failed to parse baseline {}", baseline_path.display()))?;
+    baseline.validate(&baseline_path)?;
     Ok(baseline
         .findings
         .into_iter()
@@ -445,6 +460,7 @@ fn confidence_key(confidence: Confidence) -> &'static str {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BaselineFile {
     version: u32,
     findings: Vec<BaselineEntry>,
@@ -453,7 +469,7 @@ struct BaselineFile {
 
 impl BaselineFile {
     fn from_report(report: &Report) -> Self {
-        Self {
+        let mut baseline = Self {
             version: 1,
             findings: report.findings.iter().map(BaselineEntry::from).collect(),
             review_hints: report
@@ -461,15 +477,52 @@ impl BaselineFile {
                 .iter()
                 .map(BaselineEntry::from)
                 .collect(),
+        };
+        baseline.sort();
+        baseline
+    }
+
+    fn sort(&mut self) {
+        self.findings.sort();
+        self.review_hints.sort();
+    }
+
+    fn validate(&self, path: &Path) -> Result<()> {
+        if self.version != 1 {
+            bail!(
+                "invalid baseline {}: unsupported version {}",
+                path.display(),
+                self.version
+            );
         }
+        for entry in self.findings.iter().chain(self.review_hints.iter()) {
+            entry.validate(path)?;
+        }
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BaselineEntry {
     rule_id: String,
     fingerprint: String,
     title: String,
+}
+
+impl BaselineEntry {
+    fn validate(&self, path: &Path) -> Result<()> {
+        if self.rule_id.trim().is_empty()
+            || self.fingerprint.trim().is_empty()
+            || self.title.trim().is_empty()
+        {
+            bail!(
+                "invalid baseline {}: entries must include rule_id, fingerprint, and title",
+                path.display()
+            );
+        }
+        Ok(())
+    }
 }
 
 impl From<&Diagnostic> for BaselineEntry {

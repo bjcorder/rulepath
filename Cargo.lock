@@ -930,7 +930,10 @@ name = "rulepath_infer"
 version = "0.1.0"
 dependencies = [
  "rulepath_config",
+ "rulepath_dataflow",
+ "rulepath_ir",
  "rulepath_workspace",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -989,6 +992,7 @@ dependencies = [
 name = "rulepath_reporters"
 version = "0.1.0"
 dependencies = [
+ "rulepath_diagnostics",
  "rulepath_ir",
  "serde",
  "serde_json",

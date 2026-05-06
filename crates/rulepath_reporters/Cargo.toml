@@ -10,6 +10,7 @@ description = "Text and JSON reporters for Rulepath."
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+rulepath_diagnostics = { path = "../rulepath_diagnostics" }
 rulepath_ir = { path = "../rulepath_ir" }
 
 [lints]

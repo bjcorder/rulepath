@@ -35,6 +35,10 @@ suppressions:
 
 `inference.generated_file` and `ci.baseline_file` must be relative paths inside the scan root. Absolute paths and paths containing `..` fail with a clear config-key error. Nested paths such as `.rulepath/generated.yml` and `.rulepath/baseline.json` are valid; write commands create parent directories inside the project.
 
+## Inferred Drafts
+
+`rulepath infer .` writes `.rulepath.inferred.yml` as a review draft. The draft is generated from parsed route, data-layer, resource, and evidence facts; it includes deterministic framework, data-layer, auth helper, resource field, and invariant suggestions with confidence comments. `inference.use_inferred_file_for_scan` stays `false`, and scans do not consume the inferred file unless reviewed content is copied into `.rulepath.yml`.
+
 ## Resources
 
 Resources define fields that imply tenancy, sensitivity, or server ownership.

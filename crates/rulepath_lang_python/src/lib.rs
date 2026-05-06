@@ -1,4 +1,4 @@
-use rulepath_ir::Language;
+use rulepath_ir::{AnalysisDiagnostic, AnalysisDiagnosticSeverity, Language, SourceSpan};
 use rulepath_parsers::{
     extract_suppressions_from_text, span_for_offsets, CallFact, ImportFact, LanguageAdapter,
     ParsedFile, SymbolFact, SymbolKind,
@@ -29,6 +29,7 @@ impl LanguageAdapter for PythonAdapter {
                 &file.text,
                 file.language,
             ),
+            diagnostics: Vec::new(),
         };
 
         let Some(tree) = parse_tree(file) else {
@@ -36,6 +37,11 @@ impl LanguageAdapter for PythonAdapter {
         };
 
         let root = tree.root_node();
+        if root.has_error() {
+            parsed
+                .diagnostics
+                .push(parse_diagnostic(file, first_error_span(file, root)));
+        }
         collect_node(file, root, 0, &mut parsed);
         parsed.imports.sort_by(span_order_import);
         parsed.symbols.sort_by(span_order_symbol);
@@ -272,6 +278,32 @@ fn node_span(file: &SourceFile, node: tree_sitter::Node<'_>) -> rulepath_ir::Sou
         node.start_byte(),
         node.end_byte(),
     )
+}
+
+#[cfg(feature = "tree-sitter-backend")]
+fn first_error_span(file: &SourceFile, node: tree_sitter::Node<'_>) -> SourceSpan {
+    if node.is_error() || node.is_missing() {
+        return node_span(file, node);
+    }
+    for index in 0..node.named_child_count() {
+        if let Some(child) = node.named_child(index as u32) {
+            if child.has_error() || child.is_error() || child.is_missing() {
+                return first_error_span(file, child);
+            }
+        }
+    }
+    SourceSpan::single_line(file.relative_path.as_str(), 1)
+}
+
+fn parse_diagnostic(file: &SourceFile, span: SourceSpan) -> AnalysisDiagnostic {
+    AnalysisDiagnostic {
+        code: "parse_error".to_owned(),
+        severity: AnalysisDiagnosticSeverity::Warning,
+        stage: "parser".to_owned(),
+        message: format!("could not fully parse {}", file.relative_path),
+        file_id: Some(file.relative_path.clone()),
+        span: Some(span),
+    }
 }
 
 fn span_order_import(left: &ImportFact, right: &ImportFact) -> std::cmp::Ordering {

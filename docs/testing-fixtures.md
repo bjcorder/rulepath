@@ -18,6 +18,9 @@ fixtures/
   nextjs_prisma_authjs/
     safe/
     unsafe/
+  v1_rule_matrix/
+    safe/
+    unsafe/
 ```
 
 Each fixture should be small, readable, and focused on one analysis behavior.
@@ -57,3 +60,16 @@ The second milestone mirrors that behavior for FastAPI and SQLAlchemy.
 The Django/DRF fixture pair verifies DRF route extraction and Django ORM extraction together. The unsafe fixture should emit unscoped resource access for a request-controlled object lookup on the inferred `InvoiceViewSet.get_object` route, while the safe fixture should remain clean because tenant filtering or object permission evidence is recognized.
 
 The Next.js/Prisma/Auth.js fixture pair verifies App Router route extraction, dynamic `[invoiceId]` source IDs, Auth.js evidence labels, and Prisma mutation findings. The unsafe fixture should emit findings for unscoped access, client-controlled mutation data, and missing operation authorization; the safe fixture should remain clean because Auth.js, permission, tenant, and allowlisted field evidence are present.
+
+## v1 Rule Matrix
+
+`fixtures/v1_rule_matrix` is a compact Express/Prisma fixture pair used to lock rule and hint coverage that is not naturally exercised by the framework parity fixtures.
+
+The unsafe matrix intentionally includes:
+
+- State transition, idempotency, bulk mutation, and export cases for `INV004` through `INV007`.
+- Unconfigured resource, authorization-looking helper, workflow transition, money-like operation, unknown export, and auth-without-scope cases for `HINT001` through `HINT006`.
+
+The safe matrix mirrors those cases with configured transition, idempotency, authorization, and tenant-scope evidence. It should emit no findings and no review hints.
+
+Together with the unsafe Express/Prisma fixture, the matrix-backed CLI tests assert coverage for every `INV001` through `INV008` finding and every `HINT001` through `HINT006` review hint.

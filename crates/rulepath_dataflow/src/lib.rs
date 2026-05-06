@@ -1,6 +1,7 @@
 use rulepath_config::ResolvedConfig;
 use rulepath_ir::{
-    CallFrame, CallPath, Confidence, OperationFact, ProjectIr, RouteFact, SourceSpan,
+    AnalysisDiagnostic, AnalysisDiagnosticSeverity, CallFrame, CallPath, Confidence, OperationFact,
+    ProjectIr, RouteFact, SourceSpan,
 };
 use rulepath_parsers::{LanguageAdapter, ParsedFile, SymbolKind};
 use rulepath_workspace::WorkspaceIndex;
@@ -20,8 +21,21 @@ pub fn build_project_ir(index: &WorkspaceIndex, config: &ResolvedConfig) -> Proj
 
     collect_framework_and_auth_facts(&mut context, config);
     collect_operation_facts(&mut context, config);
+    context
+        .ir
+        .analysis_diagnostics
+        .extend(index.analysis_diagnostics.clone());
+    context.ir.analysis_diagnostics.extend(
+        context
+            .parsed_files
+            .iter()
+            .flat_map(|parsed| parsed.diagnostics.clone()),
+    );
+    collect_operation_diagnostics(&mut context.ir);
 
-    let trace_index = build_trace_index(context.index, &context.parsed_files, &context.ir);
+    let (trace_index, import_diagnostics) =
+        build_trace_index(context.index, &context.parsed_files, &context.ir);
+    context.ir.analysis_diagnostics.extend(import_diagnostics);
     attach_route_evidence(&mut context.ir);
     attach_call_paths(&mut context.ir, &trace_index, config);
     rewrite_operation_sources_to_route_sources(&mut context.ir);
@@ -94,6 +108,25 @@ fn collect_operation_facts(context: &mut ScanContext<'_>, config: &ResolvedConfi
                 &context.ir.routes,
             ));
     }
+}
+
+fn collect_operation_diagnostics(ir: &mut ProjectIr) {
+    ir.analysis_diagnostics.extend(
+        ir.operations
+            .iter()
+            .filter(|operation| operation.resource == "Unknown")
+            .map(|operation| AnalysisDiagnostic {
+                code: "ambiguous_resource".to_owned(),
+                severity: AnalysisDiagnosticSeverity::Warning,
+                stage: "orm".to_owned(),
+                message: format!(
+                    "could not infer resource for {} operation",
+                    operation.method
+                ),
+                file_id: Some(operation.span.file_id.clone()),
+                span: Some(operation.span.clone()),
+            }),
+    );
 }
 
 fn parsed_for_file<'a>(parsed_files: &'a [ParsedFile], file_id: &str) -> Option<&'a ParsedFile> {
@@ -452,7 +485,7 @@ fn build_trace_index(
     index: &WorkspaceIndex,
     parsed_files: &[ParsedFile],
     ir: &ProjectIr,
-) -> TraceIndex {
+) -> (TraceIndex, Vec<AnalysisDiagnostic>) {
     let mut functions = parsed_files
         .iter()
         .flat_map(extract_functions)
@@ -473,16 +506,20 @@ fn build_trace_index(
         .iter()
         .flat_map(|parsed| extract_function_calls(parsed, &functions))
         .collect::<Vec<_>>();
+    let mut import_diagnostics = Vec::new();
     let imports = parsed_files
         .iter()
-        .flat_map(|parsed| resolve_imports(parsed, index))
+        .flat_map(|parsed| resolve_imports(parsed, index, &mut import_diagnostics))
         .collect::<Vec<_>>();
-    TraceIndex {
-        functions,
-        route_calls,
-        function_calls,
-        imports,
-    }
+    (
+        TraceIndex {
+            functions,
+            route_calls,
+            function_calls,
+            imports,
+        },
+        import_diagnostics,
+    )
 }
 
 fn extract_functions(parsed: &ParsedFile) -> Vec<FunctionSpan> {
@@ -566,11 +603,28 @@ fn extract_route_calls(parsed: &ParsedFile, route: &RouteFact) -> Vec<RouteCall>
         .collect()
 }
 
-fn resolve_imports(parsed: &ParsedFile, index: &WorkspaceIndex) -> Vec<ResolvedImport> {
+fn resolve_imports(
+    parsed: &ParsedFile,
+    index: &WorkspaceIndex,
+    diagnostics: &mut Vec<AnalysisDiagnostic>,
+) -> Vec<ResolvedImport> {
     let mut resolved = Vec::new();
     for import in &parsed.imports {
         let target_file_id =
             resolve_module_path(parsed.file_id.as_str(), import.module.as_str(), index);
+        if import.module.starts_with('.') && target_file_id.is_none() {
+            diagnostics.push(AnalysisDiagnostic {
+                code: "unresolved_import".to_owned(),
+                severity: AnalysisDiagnosticSeverity::Warning,
+                stage: "dataflow".to_owned(),
+                message: format!(
+                    "could not resolve import {} from {}",
+                    import.module, parsed.file_id
+                ),
+                file_id: Some(parsed.file_id.clone()),
+                span: Some(import.span.clone()),
+            });
+        }
         if import.names.is_empty() {
             let Some(target_file_id) = target_file_id else {
                 continue;
@@ -718,6 +772,18 @@ fn sort_project_ir(ir: &mut ProjectIr) {
         .sort_by(|left, right| span_key(&left.span).cmp(&span_key(&right.span)));
     ir.call_paths
         .sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+    ir.analysis_diagnostics.sort_by(|left, right| {
+        left.file_id
+            .cmp(&right.file_id)
+            .then_with(|| {
+                left.span
+                    .as_ref()
+                    .map(span_key)
+                    .cmp(&right.span.as_ref().map(span_key))
+            })
+            .then(left.code.cmp(&right.code))
+            .then(left.message.cmp(&right.message))
+    });
 }
 
 fn span_key(span: &SourceSpan) -> (&str, usize, usize) {
@@ -772,6 +838,7 @@ mod tests {
                 span: SourceSpan::single_line("src/routes/invoices.ts", 4),
             }],
             suppressions: Vec::new(),
+            diagnostics: Vec::new(),
         };
         let index = WorkspaceIndex {
             root: ".".into(),
@@ -781,6 +848,7 @@ mod tests {
                 language: Language::TypeScript,
                 text: "function routeHandler() {\nupdateInvoice()\n}".to_owned(),
             }],
+            analysis_diagnostics: Vec::new(),
         };
         let ir = ProjectIr {
             routes: vec![RouteFact {
@@ -797,7 +865,8 @@ mod tests {
             ..ProjectIr::default()
         };
 
-        let trace = build_trace_index(&index, &[parsed], &ir);
+        let (trace, diagnostics) = build_trace_index(&index, &[parsed], &ir);
+        assert!(diagnostics.is_empty());
         assert_eq!(trace.functions[0].name, "routeHandler");
         assert_eq!(trace.route_calls[0].callee, "updateInvoice");
     }
@@ -826,6 +895,7 @@ mod tests {
                     text: "function writeInvoice() {\n  prisma.invoice.update()\n}\n".to_owned(),
                 },
             ],
+            analysis_diagnostics: Vec::new(),
         };
         let parsed = vec![
             ParsedFile {
@@ -843,6 +913,7 @@ mod tests {
                     span: SourceSpan::single_line("src/routes/invoices.ts", 5),
                 }],
                 suppressions: Vec::new(),
+                diagnostics: Vec::new(),
             },
             ParsedFile {
                 language: Language::TypeScript,
@@ -863,6 +934,7 @@ mod tests {
                     span: SourceSpan::single_line("src/services/invoices.ts", 4),
                 }],
                 suppressions: Vec::new(),
+                diagnostics: Vec::new(),
             },
             ParsedFile {
                 language: Language::TypeScript,
@@ -875,6 +947,7 @@ mod tests {
                 }],
                 calls: Vec::new(),
                 suppressions: Vec::new(),
+                diagnostics: Vec::new(),
             },
         ];
         let ir = ProjectIr {
@@ -903,7 +976,8 @@ mod tests {
             ..ProjectIr::default()
         };
 
-        let trace = build_trace_index(&index, &parsed, &ir);
+        let (trace, diagnostics) = build_trace_index(&index, &parsed, &ir);
+        assert!(diagnostics.is_empty());
         let operation_function = trace
             .function_for_span(&ir.operations[0].span)
             .expect("operation should be inside repository function");

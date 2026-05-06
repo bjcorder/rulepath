@@ -13,6 +13,12 @@ Rulepath is a security-adjacent analyzer, so dependency resolution must be deter
 - Git dependencies are discouraged. If one is unavoidable, it must use `rev = "<40-char commit SHA>"`, never a branch or tag.
 - Versioned runner labels must be used in CI instead of moving `*-latest` labels.
 
+## CI Enforcement
+
+CI runs `bjcorder/deterministic-deps` immediately after checkout and pins that action to the full commit SHA `6076e4b0edc592d8f09b8984bf504b8709eb6b4f`. The action runs in `enforce` mode with `severity-threshold: medium` and remote validation enabled, so mutable GitHub Action refs, missing pinned commits, and Cargo git dependencies fail before normal Rust checks without failing on transient low-severity validation errors.
+
+Rulepath also runs `scripts/check-dependency-pinning.ps1` before `cargo metadata`, formatting, clippy, tests, and builds. This small repo-local contract check covers project-specific requirements that are not fully enforced by the action: exact registry dependency requirements from Cargo metadata, the committed root lockfile, exact `rust-toolchain.toml` channel, full-SHA workflow `uses:` entries, and versioned runner labels.
+
 ## Updating Dependencies
 
 Dependency updates must be explicit PRs.
@@ -30,6 +36,9 @@ For GitHub Actions, resolve the desired tag to a commit SHA and pin the `uses:` 
 Use these commands before merging:
 
 ```bash
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/check-dependency-pinning.ps1
+# On Windows PowerShell:
+powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/check-dependency-pinning.ps1
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets
 cargo test --locked --workspace

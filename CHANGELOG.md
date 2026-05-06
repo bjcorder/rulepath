@@ -21,3 +21,10 @@ All notable changes to Rulepath will be documented here.
 - Restrict config-controlled inference output and CI baseline paths to relative paths inside the scan root.
 - Restrict suppression parsing to recognized TypeScript/JavaScript and Python comments so string literals cannot suppress findings.
 - Include sink identity and primary span location in diagnostic fingerprints; regenerate baselines after upgrading.
+- Complete v1 rule and review-hint coverage for `INV001` through `INV008` and `HINT001` through `HINT006`.
+- Add GitHub Actions finding annotations and harden text, JSON, SARIF, and CI output contract coverage.
+- Stabilize diagnostic fingerprints around semantic route and sink identity, and validate deterministic baseline files.
+- Expand the fixture matrix with v1 rule and review-hint coverage plus safe/unsafe structured assertions.
+- Improve `.rulepath.inferred.yml` generation using IR facts, deterministic strict-config-compatible YAML, and fixture-backed inference tests.
+- Add non-fatal analysis diagnostics for parse errors, unresolved imports, ambiguous resources, and skipped non-UTF8 files.
+- Enforce dependency pinning in CI with `bjcorder/deterministic-deps` and a repo-local Rulepath pinning contract check.

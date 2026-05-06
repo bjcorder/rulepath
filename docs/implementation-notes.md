@@ -39,7 +39,7 @@ Safe parallel points include file parsing, fact extraction, data-layer extractio
 
 Fatal errors include config load failures, schema violations, invalid baselines, and output write failures.
 
-Non-fatal diagnostics include parse errors in individual files, unresolved imports, unsupported syntax, and ambiguous resource inference.
+Non-fatal diagnostics include parse errors in individual files, unresolved relative imports, unsupported syntax, skipped non-UTF8 source files, and ambiguous resource inference. These diagnostics are carried separately from findings and review hints so analyzer health warnings do not become policy violations.
 
 Uncertainty should reduce confidence or produce review hints.
 
