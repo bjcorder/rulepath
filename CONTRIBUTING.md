@@ -2,6 +2,20 @@
 
 Thanks for helping build Rulepath.
 
+## Licensing and CLA
+
+Rulepath is licensed under the GNU Affero General Public License v3.0 only
+(`AGPL-3.0-only`).
+
+Non-trivial contributions require acceptance of the
+[Rulepath Contributor License Agreement](CLA.md) before merge. The CLA keeps
+contributors' copyright ownership while granting the project maintainer the
+rights needed to distribute, sublicense, relicense, and maintain Rulepath.
+
+When CLA automation is enabled, the required CLA check must pass before a pull
+request is merged. Until then, maintainers may record acceptance manually in the
+pull request.
+
 ## Development
 
 ```bash
