@@ -22,7 +22,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-only"
 authors = ["Brian Corder"]
 repository = "https://github.com/BrianCorder/rulepath"
 description = "Rust-native business logic and invariant analysis for web applications."

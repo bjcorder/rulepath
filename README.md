@@ -160,4 +160,6 @@ Findings are high-confidence invariant violations; review hints are medium-confi
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [SUPPORT.md](SUPPORT.md).
 
-Rulepath is released under the MIT license.
+Rulepath is released under the GNU Affero General Public License v3.0 only
+(`AGPL-3.0-only`). Contributions are accepted under the
+[Rulepath Contributor License Agreement](CLA.md).
