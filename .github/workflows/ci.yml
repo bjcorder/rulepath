@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
       - name: Dependency pinning
         # bjcorder/deterministic-deps main snapshot, pinned to a full commit SHA.
-        uses: bjcorder/deterministic-deps@6076e4b0edc592d8f09b8984bf504b8709eb6b4f
+        uses: bjcorder/deterministic-deps@838ba7893ec59d17e7883fbc1629a222dacb431b
         with:
           mode: enforce
           severity-threshold: medium
