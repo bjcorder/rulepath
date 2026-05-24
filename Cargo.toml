@@ -35,7 +35,7 @@ ignore = "=0.4.25"
 lasso = "=0.7.3"
 miette = { version = "=7.6.0", features = ["fancy"] }
 oxc_allocator = "=0.128.0"
-oxc_ast = "=0.128.0"
+oxc_ast = "=0.132.0"
 oxc_parser = "=0.128.0"
 oxc_span = "=0.128.0"
 petgraph = "=0.8.3"
